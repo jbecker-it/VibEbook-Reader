@@ -142,7 +142,10 @@ class EpubParser {
 
     /** Löst einen href relativ zum OPF-Ordner zu einem absoluten Pfad auf. */
     private fun resolve(opfDir: File, href: String): String {
-        val clean = href.substringBefore('#').substringBefore('?')
+        // hrefs im OPF sind häufig URL-kodiert (z. B. "Kapitel%201.xhtml") –
+        // ohne Dekodierung existiert die Datei scheinbar nicht und das Kapitel
+        // fällt aus dem Spine. Uri.decode dekodiert nur %XX-Sequenzen.
+        val clean = android.net.Uri.decode(href.substringBefore('#').substringBefore('?'))
         return File(opfDir, clean).canonicalPath
     }
 
