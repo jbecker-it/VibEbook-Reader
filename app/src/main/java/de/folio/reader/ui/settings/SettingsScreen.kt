@@ -55,6 +55,8 @@ fun SettingsScreen(
     val wifiOnly by viewModel.wifiOnly.collectAsStateWithLifecycle()
     val connectionTest by viewModel.connectionTest.collectAsStateWithLifecycle()
 
+    androidx.activity.compose.BackHandler { onClose() }
+
     var host by remember { mutableStateOf("") }
     var share by remember { mutableStateOf("") }
     var user by remember { mutableStateOf("") }

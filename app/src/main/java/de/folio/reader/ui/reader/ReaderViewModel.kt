@@ -13,14 +13,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class ReaderUiState(
     val book: Book? = null,
     val spineIndex: Int = 0,
-    /** Beim Öffnen wiederherzustellende Scrollposition (einmalig pro Kapitel). */
+    /** Beim Laden des Kapitels wiederherzustellende Scrollposition (0..1). */
     val restoreScrollFraction: Float = 0f,
+    /** Live-Position im aktuellen Kapitel (0..1) – für die Prozentanzeige. */
+    val chapterFraction: Float = 0f,
+    val favorite: Boolean = false,
     val loading: Boolean = true,
 )
 
@@ -46,32 +50,59 @@ class ReaderViewModel @Inject constructor(
             runCatching { bookRepository.syncProgress(bookId) }
             val book = bookRepository.observeBook(bookId).first()
             val saved = book?.progress
-            val maxIndex = (book?.spine?.size ?: 1) - 1
+            val maxIndex = ((book?.spine?.size ?: 1) - 1).coerceAtLeast(0)
+            val restore = saved?.scrollFraction ?: 0f
             _state.value = ReaderUiState(
                 book = book,
-                spineIndex = (saved?.spineIndex ?: 0).coerceIn(0, maxIndex.coerceAtLeast(0)),
-                restoreScrollFraction = saved?.scrollFraction ?: 0f,
+                spineIndex = (saved?.spineIndex ?: 0).coerceIn(0, maxIndex),
+                restoreScrollFraction = restore,
+                chapterFraction = restore,
+                favorite = book?.favorite ?: false,
                 loading = false,
             )
-            lastScrollFraction = saved?.scrollFraction ?: 0f
+            lastScrollFraction = restore
         }
     }
 
-    fun goToChapter(index: Int) {
+    /** [restoreFraction]: 0 = Kapitelanfang, 1 = Kapitelende (Rückwärtsblättern). */
+    fun goToChapter(index: Int, restoreFraction: Float = 0f) {
         val book = _state.value.book ?: return
+        if (book.spine.isEmpty()) return
         val clamped = index.coerceIn(0, book.spine.size - 1)
-        _state.value = _state.value.copy(spineIndex = clamped, restoreScrollFraction = 0f)
-        lastScrollFraction = 0f
+        if (clamped == _state.value.spineIndex && restoreFraction == _state.value.restoreScrollFraction) return
+        lastScrollFraction = restoreFraction
+        _state.update {
+            it.copy(
+                spineIndex = clamped,
+                restoreScrollFraction = restoreFraction,
+                chapterFraction = restoreFraction,
+            )
+        }
         scheduleSave()
     }
 
-    fun nextChapter() = goToChapter(_state.value.spineIndex + 1)
-    fun previousChapter() = goToChapter(_state.value.spineIndex - 1)
+    fun nextChapter() = goToChapter(_state.value.spineIndex + 1, restoreFraction = 0f)
+
+    /** Rückwärts über die Kapitelgrenze: ans Ende des vorherigen Kapitels springen. */
+    fun previousChapter() = goToChapter(_state.value.spineIndex - 1, restoreFraction = 1f)
 
     /** Vom WebView gemeldete Scrollposition (0..1) innerhalb des Kapitels. */
     fun onScroll(fraction: Float) {
         lastScrollFraction = fraction
+        _state.update { it.copy(chapterFraction = fraction) }
         scheduleSave()
+    }
+
+    fun toggleFavorite() {
+        val book = _state.value.book ?: return
+        _state.update { it.copy(favorite = !it.favorite) }
+        viewModelScope.launch { bookRepository.toggleFavorite(book.id) }
+    }
+
+    /** Sofort speichern – vom Reader-Screen beim Verlassen aufgerufen. */
+    fun saveNow() {
+        saveJob?.cancel()
+        viewModelScope.launch { persist() }
     }
 
     private fun scheduleSave() {
@@ -85,6 +116,7 @@ class ReaderViewModel @Inject constructor(
     private suspend fun persist() {
         val s = _state.value
         val book = s.book ?: return
+        if (book.spine.isEmpty()) return
         val finished = s.spineIndex >= book.spine.lastIndex && lastScrollFraction > 0.98f
         bookRepository.saveProgress(
             ReadingProgress(
@@ -96,11 +128,5 @@ class ReaderViewModel @Inject constructor(
                 finished = finished,
             )
         )
-    }
-
-    /** Sofort speichern – vom Reader-Screen beim Verlassen aufgerufen. */
-    fun saveNow() {
-        saveJob?.cancel()
-        viewModelScope.launch { persist() }
     }
 }

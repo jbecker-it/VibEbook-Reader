@@ -16,4 +16,5 @@ data class BookEntity(
     val sizeBytes: Long,
     /** Zeitstempel der Datei auf dem NAS – erkennt geänderte/neue Bücher. */
     val remoteModified: Long,
+    val favorite: Boolean = false,
 )

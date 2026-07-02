@@ -6,11 +6,10 @@ abgleicht. Optimiert für Smartphones, Foldables und Tablets, mit echtem AMOLED-
 
 ## Die vier Schwerpunkte
 
-**Skalierbar auf Foldable und Tablet.** Das Layout richtet sich nach der
-`WindowSizeClass`. Schmal (Phone, gefaltetes Foldable) → eine Spalte: Bibliothek bzw.
-Reader im Vollbild. Mittel/breit (Tablet, aufgeklapptes Foldable) → zwei Spalten:
-Bibliotheksliste links, Reader rechts. Das Buch-Grid nutzt `GridCells.Adaptive` und füllt
-jede Breite sinnvoll. Siehe `ui/FolioApp.kt`.
+**Skalierbar auf Foldable und Tablet.** Das Buch-Grid nutzt `GridCells.Adaptive` und
+füllt jede Breite sinnvoll – vom Phone über das aufgeklappte Foldable bis zum Tablet.
+Der Reader läuft bewusst immer im Vollbild; der Fließtext ist auf eine angenehme
+Zeilenbreite begrenzt und mittig gesetzt, sodass auch große Displays gut lesbar bleiben.
 
 **NAS per SMB, Offline-Sync.** `data/smb/SmbClient.kt` kapselt die SMB2/3-Anbindung
 (Bibliothek `smbj`). Beim Synchronisieren werden alle `.epub`-Dateien rekursiv gefunden,
@@ -18,15 +17,21 @@ heruntergeladen, lokal entpackt (`data/epub/EpubParser.kt`) und in einer Room-Da
 registriert. Danach sind die Bücher vollständig offline lesbar. Der Abgleich läuft über
 `WorkManager` (`data/sync/`), wahlweise nur über WLAN.
 
-**Geräteübergreifender Lesefortschritt.** Pro Buch wird eine eigene JSON-Datei
-geführt (`<id>.json`), lokal unter `filesDir/progress/` gespeichert und bei nächster
-Gelegenheit per SMB in den konfigurierten Fortschritts-Ordner auf dem NAS geschrieben.
-Die Buch-ID ist ein Hash des relativen NAS-Pfads – dasselbe Buch erhält auf jedem Gerät
-dieselbe ID und damit dieselbe Fortschrittsdatei. Konflikte werden per Last-Write-Wins
-über den Zeitstempel aufgelöst (`domain/model/ReadingProgress.kt`,
-`data/progress/`, `data/repository/BookRepository.kt`). Beim Öffnen eines Buches wird der
-Fortschritt zuerst mit dem NAS abgeglichen, sodass man nahtlos auf einem anderen Gerät
-weiterliest.
+**Geräteübergreifende Metadaten.** Pro Buch wird eine eigene JSON-Datei geführt
+(`<id>.json`) mit Leseposition, „fertig gelesen" und Favorit. Sie liegt lokal unter
+`filesDir/progress/` und wird bei nächster Gelegenheit per SMB in den konfigurierten
+Metadaten-Ordner auf dem NAS geschrieben. Die Buch-ID ist ein Hash des relativen
+NAS-Pfads – dasselbe Buch erhält auf jedem Gerät dieselbe ID und damit dieselbe Datei.
+Konflikte werden FELDWEISE per Last-Write-Wins aufgelöst: Leseposition/finished und
+Favorit tragen je einen eigenen Zeitstempel, sodass Weiterlesen auf Gerät B ein
+Favorisieren auf Gerät A nicht überschreibt (`domain/model/ReadingProgress.kt`,
+`data/repository/BookRepository.kt`).
+
+Sync-Zeitpunkte: beim Öffnen eines Buches (zieht den neuesten Stand vom NAS), beim
+Schließen bzw. bei jeder lokalen Änderung (debounced, sofortiger Abgleich sofern
+erreichbar), periodisch alle 6 Stunden über WorkManager sowie manuell über den
+Sync-Button. Ist das NAS gerade nicht erreichbar, bleibt die Änderung lokal liegen und
+wird beim nächsten Anlass nachgezogen.
 
 **AMOLED-Modus.** Reines Schwarz (#000000) als Hintergrund, weißer Text – spart auf
 OLED-Displays Strom und maximiert den Kontrast. Der Modus gilt sowohl für die App-Oberfläche
@@ -50,6 +55,23 @@ Ohne Android Studio per Kommandozeile (JDK 17 vorausgesetzt):
 
 `local.properties` wird von Android Studio mit dem SDK-Pfad erzeugt; bei reinem
 CLI-Build manuell anlegen: `sdk.dir=/pfad/zum/Android/Sdk`.
+
+## Bedienung des Readers
+
+Der Reader ist minimalistisch: Tippen in der **Bildschirmmitte** blendet das Menü ein
+und aus (Titel, Favoriten-Herz, Kapitel-Slider, Prozentanzeige). Tippen **rechts**
+blättert vor, **links** zurück – an Kapitelgrenzen geht es automatisch ins nächste bzw.
+ans Ende des vorherigen Kapitels. Solange das Menü verborgen ist, sind auch die
+Systemleisten ausgeblendet.
+
+## Bibliothek
+
+Drei Tabs: **Bibliothek** (spiegelt die Ordnerstruktur der SMB-Freigabe wider – Ordner
+antippen zum Öffnen, Zurück-Geste führt eine Ebene hoch), **Lese ich** (angefangene
+Bücher, zuletzt gelesene zuerst) und **Favoriten** (per Herz auf dem Cover markiert).
+Cover zeigen einen Fortschrittsbalken am unteren Rand und einen Haken, wenn das Buch
+fertig gelesen ist. Während der Synchronisierung erscheint ein Statusbanner mit
+Fortschrittsbalken.
 
 ## Erste Schritte in der App
 

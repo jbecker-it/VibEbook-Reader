@@ -19,4 +19,25 @@ data class Book(
     val downloaded: Boolean,
     val sizeBytes: Long,
     val progress: ReadingProgress?,
+    val favorite: Boolean = false,
 )
+
+/** Gesamtfortschritt 0..1 über alle Kapitel. */
+val Book.readFraction: Float
+    get() {
+        val p = progress ?: return 0f
+        val count = spine.size.coerceAtLeast(1)
+        return ((p.spineIndex + p.scrollFraction) / count).coerceIn(0f, 1f)
+    }
+
+/** Fertig gelesen (Flag aus dem Fortschritt oder praktisch am Ende). */
+val Book.isFinished: Boolean
+    get() = progress?.finished == true || readFraction >= 0.98f
+
+/** Bereits angefangen (für den Tab „Lese ich"). */
+val Book.isStarted: Boolean
+    get() = (progress?.spineIndex ?: 0) > 0 || (progress?.scrollFraction ?: 0f) > 0.01f
+
+/** Ordner des Buches relativ zur Bibliothek ("" = Wurzel). */
+val Book.folder: String
+    get() = relativePath.substringBeforeLast('/', "")

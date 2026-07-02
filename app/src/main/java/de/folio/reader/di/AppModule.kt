@@ -21,6 +21,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): FolioDatabase =
         Room.databaseBuilder(context, FolioDatabase::class.java, "folio.db")
+            .addMigrations(FolioDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
 

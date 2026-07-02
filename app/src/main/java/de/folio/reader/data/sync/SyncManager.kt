@@ -26,6 +26,13 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class SyncStatus(
+    val running: Boolean = false,
+    val message: String? = null,
+    /** 0..1 während des Buch-Downloads, sonst null (unbestimmt). */
+    val fraction: Float? = null,
+)
+
 @Singleton
 class SyncManager @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -48,6 +55,26 @@ class SyncManager @Inject constructor(
     val isSyncing: Flow<Boolean> = workManager
         .getWorkInfosForUniqueWorkFlow(WORK_ONE_TIME)
         .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED } }
+
+    /** Laufender Sync mit Status-Text und Fortschrittsanteil (null = unbestimmt). */
+    val syncStatus: Flow<SyncStatus> = workManager
+        .getWorkInfosForUniqueWorkFlow(WORK_ONE_TIME)
+        .map { infos ->
+            val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
+            when {
+                running != null -> {
+                    val fraction = running.progress.getFloat(SyncWorker.KEY_FRACTION, -1f)
+                    SyncStatus(
+                        running = true,
+                        message = running.progress.getString(SyncWorker.KEY_MESSAGE),
+                        fraction = fraction.takeIf { it in 0f..1f },
+                    )
+                }
+                infos.any { it.state == WorkInfo.State.ENQUEUED } ->
+                    SyncStatus(running = true, message = "Warte auf Netzwerk …", fraction = null)
+                else -> SyncStatus()
+            }
+        }
 
     /** Sofortige, einmalige Synchronisierung. */
     suspend fun syncNow() {

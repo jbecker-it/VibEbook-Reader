@@ -31,6 +31,9 @@ interface BookDao {
     @Query("UPDATE books SET downloaded = :downloaded, spineJson = :spineJson, coverPath = :cover, title = :title, author = :author WHERE id = :id")
     suspend fun markDownloaded(id: String, downloaded: Boolean, spineJson: String, cover: String?, title: String, author: String)
 
+    @Query("UPDATE books SET favorite = :favorite WHERE id = :id")
+    suspend fun setFavorite(id: String, favorite: Boolean)
+
     @Query("DELETE FROM books WHERE id = :id")
     suspend fun delete(id: String)
 
