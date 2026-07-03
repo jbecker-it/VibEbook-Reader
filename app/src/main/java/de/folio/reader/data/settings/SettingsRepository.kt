@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import de.folio.reader.domain.model.PageLayoutMode
 import de.folio.reader.domain.model.SmbSettings
 import de.folio.reader.domain.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
@@ -31,7 +32,9 @@ class SettingsRepository @Inject constructor(
         val ROOT = stringPreferencesKey("smb_root")
         val PROGRESS_DIR = stringPreferencesKey("smb_progress_dir")
         val THEME = stringPreferencesKey("theme_mode")
+        val PAGE_LAYOUT = stringPreferencesKey("page_layout")
         val WIFI_ONLY = booleanPreferencesKey("sync_wifi_only")
+        val EINK = booleanPreferencesKey("eink_mode")
         val DEVICE_ID = stringPreferencesKey("device_id")
     }
 
@@ -52,7 +55,15 @@ class SettingsRepository @Inject constructor(
             .getOrDefault(ThemeMode.AMOLED)
     }
 
+    val pageLayout: Flow<PageLayoutMode> = context.dataStore.data.map { p ->
+        runCatching { PageLayoutMode.valueOf(p[Keys.PAGE_LAYOUT] ?: PageLayoutMode.AUTO.name) }
+            .getOrDefault(PageLayoutMode.AUTO)
+    }
+
     val wifiOnly: Flow<Boolean> = context.dataStore.data.map { it[Keys.WIFI_ONLY] ?: true }
+
+    /** E-Ink-Modus: Blättern und Menü ohne Animationen. */
+    val eInkMode: Flow<Boolean> = context.dataStore.data.map { it[Keys.EINK] ?: false }
 
     suspend fun currentSmbSettings(): SmbSettings = smbSettings.first()
 
@@ -72,8 +83,16 @@ class SettingsRepository @Inject constructor(
         context.dataStore.edit { it[Keys.THEME] = mode.name }
     }
 
+    suspend fun setPageLayout(mode: PageLayoutMode) {
+        context.dataStore.edit { it[Keys.PAGE_LAYOUT] = mode.name }
+    }
+
     suspend fun setWifiOnly(value: Boolean) {
         context.dataStore.edit { it[Keys.WIFI_ONLY] = value }
+    }
+
+    suspend fun setEInkMode(value: Boolean) {
+        context.dataStore.edit { it[Keys.EINK] = value }
     }
 
     /** Liefert (und erzeugt einmalig) eine stabile, anonyme Geräte-ID. */

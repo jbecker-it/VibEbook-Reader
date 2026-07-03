@@ -41,6 +41,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import de.folio.reader.domain.model.PageLayoutMode
 import de.folio.reader.domain.model.SmbSettings
 import de.folio.reader.domain.model.ThemeMode
 
@@ -52,7 +53,9 @@ fun SettingsScreen(
 ) {
     val saved by viewModel.smbSettings.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val pageLayout by viewModel.pageLayout.collectAsStateWithLifecycle()
     val wifiOnly by viewModel.wifiOnly.collectAsStateWithLifecycle()
+    val eInkMode by viewModel.eInkMode.collectAsStateWithLifecycle()
     val connectionTest by viewModel.connectionTest.collectAsStateWithLifecycle()
 
     androidx.activity.compose.BackHandler { onClose() }
@@ -110,6 +113,38 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("E-Ink-Modus", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Blättern und Menü ohne Animationen – für E-Reader-Displays.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = eInkMode, onCheckedChange = viewModel::setEInkMode)
+            }
+
+            SectionTitle("Seitenlayout")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PageLayoutMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = pageLayout == mode,
+                        onClick = { viewModel.setPageLayout(mode) },
+                        label = { Text(mode.label()) },
+                    )
+                }
+            }
+            Text(
+                text = "Automatisch zeigt ab Tablet-/Foldable-Breite zwei Seiten nebeneinander.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             SectionTitle("NAS-Verbindung (SMB)")
             OutlinedTextField(
@@ -214,6 +249,12 @@ private fun SectionTitle(text: String) {
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(top = 12.dp),
     )
+}
+
+private fun PageLayoutMode.label() = when (this) {
+    PageLayoutMode.AUTO -> "Automatisch"
+    PageLayoutMode.SINGLE -> "Einseitig"
+    PageLayoutMode.DOUBLE -> "Zweiseitig"
 }
 
 private fun ThemeMode.label() = when (this) {

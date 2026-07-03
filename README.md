@@ -58,11 +58,28 @@ CLI-Build manuell anlegen: `sdk.dir=/pfad/zum/Android/Sdk`.
 
 ## Bedienung des Readers
 
-Der Reader ist minimalistisch: Tippen in der **Bildschirmmitte** blendet das Menü ein
-und aus (Titel, Favoriten-Herz, Kapitel-Slider, Prozentanzeige). Tippen **rechts**
-blättert vor, **links** zurück – an Kapitelgrenzen geht es automatisch ins nächste bzw.
-ans Ende des vorherigen Kapitels. Solange das Menü verborgen ist, sind auch die
-Systemleisten ausgeblendet.
+Der Reader arbeitet **seitenbasiert wie ein echtes Buch**: Der Kapiteltext wird per
+CSS-Spalten exakt auf die Bildschirmgröße paginiert – kein Scrollen. Geblättert wird
+per **Wischgeste** oder Tippen **rechts/links**; an Kapitelgrenzen geht es nahtlos ins
+nächste bzw. ans Ende des vorherigen Kapitels. Tippen in der **Mitte** blendet das
+Menü ein/aus (Titel, Favoriten-Herz, Kapitel-Slider, Prozentanzeige). Solange das Menü
+verborgen ist, sind auch die Systemleisten ausgeblendet.
+
+In den Einstellungen ist das **Seitenlayout** wählbar: *Einseitig*, *Zweiseitig* oder
+*Automatisch* (zweiseitig ab ~600 dp Fensterbreite – also auf dem aufgeklappten Fold
+und auf Tablets). Beim Auf-/Zuklappen eines Foldables oder bei Rotation wird unter
+Beibehaltung der Leseposition neu paginiert.
+
+**Wortgenauer Fortschritt trotz unterschiedlicher Seitenzahlen pro Gerät:**
+Gespeichert wird nie eine Seitenzahl, sondern der **Zeichen-Offset des ersten
+sichtbaren Worts** im Kapiteltext. Da jedes Gerät dieselbe EPUB-Datei vom NAS rendert,
+ist dieser Anker geräteunabhängig – egal ob ein 6-Zoll-Reader 14 Seiten aus dem Kapitel
+macht oder das 14-Zoll-Tablet zweiseitig nur 4: Beim Öffnen sucht jedes Gerät die
+Seite, die genau dieses Wort enthält. Als Fallback (alte Fortschrittsdateien, Kapitel
+ohne Text) dient weiterhin der Kapitel-Anteil 0..1.
+
+**E-Ink-Modus** (Einstellungen → Darstellung): blättert und öffnet das Menü ohne
+Animationen – für E-Reader-Displays, auf denen weiche Übergänge nur schlieren.
 
 ## Bibliothek
 
