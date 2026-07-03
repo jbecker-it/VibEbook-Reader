@@ -7,11 +7,14 @@ import android.content.ContextWrapper
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -50,8 +53,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,14 +65,18 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import de.folio.reader.domain.model.PageLayoutMode
 import java.io.File
 import kotlin.math.roundToInt
 
 /**
- * Vollbild-Reader. Tippen in der Bildschirmmitte blendet das Menü ein/aus,
- * Tippen links/rechts blättert seitenweise (an Kapitelgrenzen weiter zum
- * nächsten/vorherigen Kapitel). Solange das Menü verborgen ist, sind auch die
- * Systemleisten ausgeblendet.
+ * Paginierter Vollbild-Reader (CSS-Spalten, kein Scrollen). Blättern per
+ * Wischgeste oder Tippen links/rechts, nahtlos über Kapitelgrenzen. Tippen in
+ * der Mitte blendet das Menü ein/aus.
+ *
+ * Geräteübergreifende Position: primär über einen wortgenauen Zeichen-Anker
+ * (Offset im Kapiteltext – identische EPUB-Datei ⇒ identische Offsets auf
+ * allen Geräten), sekundär über den Kapitel-Anteil 0..1 als Fallback.
  */
 @Composable
 fun ReaderScreen(
@@ -79,6 +86,8 @@ fun ReaderScreen(
 ) {
     LaunchedEffect(bookId) { viewModel.load(bookId) }
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val pageLayout by viewModel.pageLayout.collectAsStateWithLifecycle()
+    val eInk by viewModel.eInkMode.collectAsStateWithLifecycle()
 
     var menuVisible by rememberSaveable { mutableStateOf(false) }
 
@@ -91,6 +100,19 @@ fun ReaderScreen(
     val fgHex = remember(colorScheme.onBackground) { colorScheme.onBackground.toCssHex() }
     val linkHex = remember(colorScheme.primary) { colorScheme.primary.toCssHex() }
     val forceColors = bgHex != "#FFFFFF"
+
+    val windowWidthDp = LocalConfiguration.current.screenWidthDp
+    val twoPage = when (pageLayout) {
+        PageLayoutMode.DOUBLE -> true
+        PageLayoutMode.SINGLE -> false
+        PageLayoutMode.AUTO -> windowWidthDp >= 600
+    }
+
+    // E-Ink: Menü ohne Animationen ein-/ausblenden.
+    val enterTop = if (eInk) EnterTransition.None else slideInVertically { -it } + fadeIn()
+    val exitTop = if (eInk) ExitTransition.None else slideOutVertically { -it } + fadeOut()
+    val enterBottom = if (eInk) EnterTransition.None else slideInVertically { it } + fadeIn()
+    val exitBottom = if (eInk) ExitTransition.None else slideOutVertically { it } + fadeOut()
 
     Box(
         modifier = Modifier
@@ -110,22 +132,24 @@ fun ReaderScreen(
             else -> EpubWebView(
                 filePath = book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)],
                 restoreFraction = state.restoreScrollFraction,
+                restoreCharOffset = state.restoreCharOffset,
+                twoPage = twoPage,
+                smoothTurns = !eInk,
                 backgroundHex = bgHex,
                 textHex = fgHex,
                 linkHex = linkHex,
                 forceColors = forceColors,
-                onScroll = viewModel::onScroll,
+                onPosition = viewModel::onPosition,
                 onToggleMenu = { menuVisible = !menuVisible },
                 onNextChapter = viewModel::nextChapter,
                 onPrevChapter = viewModel::previousChapter,
             )
         }
 
-        // Oberes Overlay: Zurück, Titel, Favorit
         AnimatedVisibility(
             visible = menuVisible && book != null,
-            enter = slideInVertically { -it } + fadeIn(),
-            exit = slideOutVertically { -it } + fadeOut(),
+            enter = enterTop,
+            exit = exitTop,
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             TopOverlay(
@@ -136,11 +160,10 @@ fun ReaderScreen(
             )
         }
 
-        // Unteres Overlay: Kapitelnavigation + Slider + Prozent
         AnimatedVisibility(
             visible = menuVisible && book != null && book.spine.isNotEmpty(),
-            enter = slideInVertically { it } + fadeIn(),
-            exit = slideOutVertically { it } + fadeOut(),
+            enter = enterBottom,
+            exit = exitBottom,
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             BottomOverlay(
@@ -252,7 +275,7 @@ private fun BottomOverlay(
 }
 
 // ---------------------------------------------------------------------------
-// WebView
+// WebView mit Spalten-Pagination und Zeichen-Ankern
 // ---------------------------------------------------------------------------
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -260,25 +283,37 @@ private fun BottomOverlay(
 private fun EpubWebView(
     filePath: String,
     restoreFraction: Float,
+    restoreCharOffset: Int,
+    twoPage: Boolean,
+    smoothTurns: Boolean,
     backgroundHex: String,
     textHex: String,
     linkHex: String,
     forceColors: Boolean,
-    onScroll: (Float) -> Unit,
+    onPosition: (Float, Int) -> Unit,
     onToggleMenu: () -> Unit,
     onNextChapter: () -> Unit,
     onPrevChapter: () -> Unit,
 ) {
     val bridge = remember { ReaderBridge(Handler(Looper.getMainLooper())) }
-    // Callbacks bei jeder Recomposition aktuell halten (Bridge lebt so lange wie der WebView).
-    bridge.scrollListener = onScroll
+    bridge.positionListener = onPosition
     bridge.toggleMenuListener = onToggleMenu
     bridge.nextChapterListener = onNextChapter
     bridge.prevChapterListener = onPrevChapter
 
+    val webViewRef = remember { arrayOfNulls<WebView>(1) }
     val lastLoaded = remember { arrayOfNulls<String>(1) }
     val injection = remember { arrayOf("") }
-    injection[0] = buildInjection(restoreFraction, backgroundHex, textHex, linkHex, forceColors)
+    injection[0] = buildInjection(
+        restoreFraction, restoreCharOffset, twoPage, smoothTurns,
+        backgroundHex, textHex, linkHex, forceColors,
+    )
+
+    // Layout-/Themewechsel ohne Neuladen anwenden: erneut injizieren – das
+    // Skript repaginiert und hält die Position über den Zeichen-Anker.
+    LaunchedEffect(twoPage, smoothTurns, backgroundHex, textHex, forceColors) {
+        webViewRef[0]?.evaluateJavascript(injection[0], null)
+    }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -288,7 +323,9 @@ private fun EpubWebView(
                 settings.allowFileAccess = true
                 settings.builtInZoomControls = false
                 settings.textZoom = 100
-                isVerticalScrollBarEnabled = true
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
                 addJavascriptInterface(bridge, "AndroidReader")
                 setBackgroundColor(android.graphics.Color.parseColor(backgroundHex))
                 webViewClient = object : WebViewClient() {
@@ -296,33 +333,30 @@ private fun EpubWebView(
                         view.evaluateJavascript(injection[0], null)
                     }
                 }
+                webViewRef[0] = this
             }
         },
         update = { web ->
             web.setBackgroundColor(android.graphics.Color.parseColor(backgroundHex))
             if (lastLoaded[0] != filePath) {
                 lastLoaded[0] = filePath
-                // Uri.fromFile kodiert Sonderzeichen/Leerzeichen im Pfad korrekt.
                 web.loadUrl(Uri.fromFile(File(filePath)).toString())
             }
         },
     )
 }
 
-/**
- * Brücke vom WebView-JavaScript nach Kotlin. JS-Aufrufe kommen auf einem
- * Hintergrund-Thread an und werden auf den Main-Thread gehoben.
- */
+/** Brücke vom WebView-JavaScript nach Kotlin (JS-Thread → Main-Thread). */
 private class ReaderBridge(private val handler: Handler) {
-    var scrollListener: (Float) -> Unit = {}
+    var positionListener: (Float, Int) -> Unit = { _, _ -> }
     var toggleMenuListener: () -> Unit = {}
     var nextChapterListener: () -> Unit = {}
     var prevChapterListener: () -> Unit = {}
 
     @JavascriptInterface
-    fun onScroll(fraction: Float) {
+    fun onPosition(fraction: Float, charOffset: Int) {
         val f = fraction.coerceIn(0f, 1f)
-        handler.post { scrollListener(f) }
+        handler.post { positionListener(f, charOffset) }
     }
 
     @JavascriptInterface
@@ -342,107 +376,261 @@ private class ReaderBridge(private val handler: Handler) {
 }
 
 /**
- * Injiziertes JS: lesefreundliches, themenpassendes Styling; Wiederherstellung
- * der Scrollposition; Scroll-Meldungen; Tap-Zonen (links = zurückblättern,
- * Mitte = Menü, rechts = vorblättern) mit Kapitelwechsel an den Grenzen.
+ * Injiziertes JS: Spalten-Pagination, Gesten, Positions-Meldungen.
+ *
+ * Wortgenaue Anker: Alle Textknoten des Kapitels werden einmal pro Layout
+ * indiziert (Knoten + kumulierter Zeichen-Start). Für jede Seite wird per
+ * Binärsuche der Zeichen-Offset des ersten sichtbaren Worts bestimmt und an
+ * Kotlin gemeldet; beim Wiederherstellen wird umgekehrt die Seite gesucht, die
+ * den gespeicherten Offset enthält. Da alle Geräte dieselbe EPUB-Datei rendern,
+ * sind die Offsets geräteunabhängig – unabhängig von Displaygröße und Layout.
+ * Fallback bleibt der Kapitel-Anteil 0..1 (alte Fortschrittsdateien).
  */
 private fun buildInjection(
     restoreFraction: Float,
+    restoreCharOffset: Int,
+    twoPage: Boolean,
+    smoothTurns: Boolean,
     backgroundHex: String,
     textHex: String,
     linkHex: String,
     forceColors: Boolean,
 ): String {
-    val colorRules = if (forceColors) {
-        """
-        html, body { background: $backgroundHex !important; color: $textHex !important; }
-        p, div, span, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, figcaption {
-            color: $textHex !important; background-color: transparent !important;
-        }
-        a { color: $linkHex !important; }
-        """.trimIndent()
-    } else {
-        "html, body { background: $backgroundHex; color: $textHex; } a { color: $linkHex; }"
-    }
-
     val frac = restoreFraction.coerceIn(0f, 1f).toString()
+    val colorRules = if (forceColors) {
+        "html,body{background:$backgroundHex !important;color:$textHex !important;}" +
+            "p,div,span,li,td,th,h1,h2,h3,h4,h5,h6,blockquote,figcaption" +
+            "{color:$textHex !important;background-color:transparent !important;}" +
+            "a{color:$linkHex !important;}"
+    } else {
+        "html,body{background:$backgroundHex;color:$textHex;}a{color:$linkHex;}"
+    }
     val colorScheme = if (forceColors) "dark" else "normal"
 
     return """
     (function() {
-        var style = document.getElementById('folio-style');
-        if (!style) {
-            style = document.createElement('style');
-            style.id = 'folio-style';
-            document.head.appendChild(style);
+        var F = window.__folio = window.__folio || {};
+        var firstRun = !F.ready;
+
+        F.twoPage = $twoPage;
+        F.smoothTurns = $smoothTurns;
+        F.colorRules = ${jsString(colorRules)};
+        F.colorScheme = "$colorScheme";
+        if (firstRun) {
+            F.fraction = $frac;          // Kapitel-Anteil 0..1 (Fallback)
+            F.anchor = $restoreCharOffset; // Zeichen-Offset, -1 = keiner
+            F.screen = 0;
+            F.screens = 1;
+            F.step = 1;
+            F.PH = 24;
         }
-        style.textContent = `
-            :root { color-scheme: $colorScheme; }
-            body {
-                margin: 0 auto; padding: 40px 22px 48px 22px; max-width: 44rem;
-                font-size: 1.12rem; line-height: 1.62;
-                -webkit-text-size-adjust: 100%;
-                overflow-wrap: break-word; word-wrap: break-word;
+
+        if (firstRun && !document.querySelector('meta[name=viewport]')) {
+            var m = document.createElement('meta');
+            m.name = 'viewport';
+            m.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
+            document.head.appendChild(m);
+        }
+
+        // ---- Textknoten-Index für Zeichen-Anker --------------------------
+        F.buildIndex = function() {
+            F.nodes = [];
+            F.textLen = 0;
+            var w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            var n;
+            while ((n = w.nextNode())) {
+                if (n.length === 0) continue;
+                F.nodes.push({ node: n, start: F.textLen });
+                F.textLen += n.length;
             }
-            img { max-width: 100%; height: auto; }
-            $colorRules
-        `;
+        };
 
-        function maxScroll() {
-            return Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-        }
-
-        function restore() {
-            var max = maxScroll();
-            if (max > 0) window.scrollTo(0, Math.round($frac * max));
-        }
-        restore();
-        setTimeout(restore, 60);
-        setTimeout(restore, 250);
-        window.addEventListener('load', restore);
-
-        if (!window.__folioInit) {
-            window.__folioInit = true;
-
-            var ticking = false;
-            function report() {
-                var max = maxScroll();
-                var f = max > 0 ? (window.scrollY / max) : 1;
-                if (window.AndroidReader && AndroidReader.onScroll) AndroidReader.onScroll(f);
-                ticking = false;
+        F.rangeAtOffset = function(off) {
+            if (!F.nodes || !F.nodes.length) return null;
+            off = Math.max(0, Math.min(F.textLen - 1, off));
+            var lo = 0, hi = F.nodes.length - 1;
+            while (lo < hi) {
+                var mid = (lo + hi + 1) >> 1;
+                if (F.nodes[mid].start <= off) lo = mid; else hi = mid - 1;
             }
-            window.addEventListener('scroll', function() {
-                if (!ticking) { window.requestAnimationFrame(report); ticking = true; }
-            }, { passive: true });
+            var e = F.nodes[lo];
+            var local = off - e.start;
+            var r = document.createRange();
+            try {
+                r.setStart(e.node, local);
+                r.setEnd(e.node, Math.min(e.node.length, local + 1));
+            } catch (err) { return null; }
+            return r;
+        };
 
-            function pageStep() { return Math.max(60, window.innerHeight * 0.9); }
-            function pageForward() {
-                if (window.scrollY >= maxScroll() - 6) {
+        F.pageOfRange = function(r) {
+            var rect = r.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0 && rect.left === 0 && rect.top === 0) return -1;
+            var docX = rect.left + window.scrollX; // dokumentabsolut, scroll-unabhängig
+            return Math.max(0, Math.min(F.screens - 1, Math.floor((docX - F.PH + 2) / F.step)));
+        };
+
+        F.pageOfOffset = function(off) {
+            for (var probe = 0; probe < 40; probe++) {
+                var r = F.rangeAtOffset(off + probe);
+                if (!r) return -1;
+                var p = F.pageOfRange(r);
+                if (p >= 0) return p;
+            }
+            return -1;
+        };
+
+        /** Zeichen-Offset des ersten sichtbaren Worts auf Seite i (Binärsuche). */
+        F.offsetForPage = function(page) {
+            if (!F.textLen) return -1;
+            var lo = 0, hi = F.textLen - 1, ans = -1;
+            while (lo <= hi) {
+                var mid = (lo + hi) >> 1;
+                var p = F.pageOfOffset(mid);
+                if (p < 0) { lo = mid + 1; continue; }
+                if (p >= page) { ans = mid; hi = mid - 1; } else { lo = mid + 1; }
+            }
+            return ans;
+        };
+
+        // ---- Layout / Pagination ------------------------------------------
+        F.applyStyle = function(C, GAP, H, PH, PV) {
+            var style = document.getElementById('folio-style');
+            if (!style) {
+                style = document.createElement('style');
+                style.id = 'folio-style';
+                document.head.appendChild(style);
+            }
+            style.textContent =
+                'html,body{margin:0;padding:0;}' +
+                'html{overscroll-behavior:none;}' +
+                '::-webkit-scrollbar{display:none;}' +
+                ':root{color-scheme:' + F.colorScheme + ';}' +
+                'body{box-sizing:border-box;' +
+                    'height:' + H + 'px;width:' + window.innerWidth + 'px;' +
+                    'padding:' + PV + 'px ' + PH + 'px;' +
+                    'column-width:' + C + 'px;column-gap:' + GAP + 'px;column-fill:auto;' +
+                    'touch-action:none;' +
+                    'font-size:1.08rem;line-height:1.6;-webkit-text-size-adjust:100%;' +
+                    'overflow-wrap:break-word;word-wrap:break-word;}' +
+                'img,svg,video{max-width:100%;max-height:' + (H - 2 * PV) + 'px;' +
+                    'height:auto;object-fit:contain;break-inside:avoid;}' +
+                'table{max-width:100%;}' +
+                F.colorRules;
+        };
+
+        F.layout = function() {
+            var W = window.innerWidth, H = window.innerHeight;
+            var GAP = 48, PH = 24, PV = 28;
+            var k = F.twoPage ? 2 : 1;
+            var C = Math.floor((W - 2 * PH - (k - 1) * GAP) / k);
+            F.PH = PH;
+            F.applyStyle(C, GAP, H, PH, PV);
+
+            F.step = k * (C + GAP);
+            var sw = document.body.scrollWidth;
+            var cols = Math.max(1, Math.round((sw - 2 * PH + GAP) / (C + GAP)));
+            F.screens = Math.max(1, Math.ceil(cols / k));
+
+            F.buildIndex();
+
+            // Zielseite: primär Zeichen-Anker, sonst Kapitel-Anteil.
+            var target = -1;
+            if (F.anchor >= 0 && F.textLen > 0) target = F.pageOfOffset(F.anchor);
+            if (target < 0) {
+                target = F.screens <= 1 ? 0 : Math.round(F.fraction * (F.screens - 1));
+            }
+            F.setScreen(target, false);
+        };
+
+        F.setScreen = function(i, smooth) {
+            i = Math.max(0, Math.min(F.screens - 1, i));
+            F.screen = i;
+            if (F.screens > 1) F.fraction = i / (F.screens - 1);
+            var a = F.offsetForPage(i);
+            if (a >= 0) F.anchor = a;
+            window.scrollTo({
+                left: i * F.step,
+                top: 0,
+                behavior: (smooth && F.smoothTurns) ? 'smooth' : 'auto',
+            });
+            if (window.AndroidReader && AndroidReader.onPosition) {
+                AndroidReader.onPosition(F.fraction, F.anchor);
+            }
+        };
+
+        F.next = function() {
+            if (F.screen < F.screens - 1) {
+                F.setScreen(F.screen + 1, true);
+            } else {
+                F.fraction = 1;
+                if (window.AndroidReader) {
+                    AndroidReader.onPosition(1, F.anchor);
                     AndroidReader.onNextChapter();
-                } else {
-                    window.scrollBy({ top: pageStep(), left: 0, behavior: 'smooth' });
                 }
             }
-            function pageBackward() {
-                if (window.scrollY <= 6) {
-                    AndroidReader.onPrevChapter();
-                } else {
-                    window.scrollBy({ top: -pageStep(), left: 0, behavior: 'smooth' });
-                }
+        };
+
+        F.prev = function() {
+            if (F.screen > 0) {
+                F.setScreen(F.screen - 1, true);
+            } else {
+                if (window.AndroidReader) AndroidReader.onPrevChapter();
             }
+        };
+
+        // ---- Gesten & Lifecycle (einmal pro Dokument) ----------------------
+        if (firstRun) {
+            F.ready = true;
 
             document.addEventListener('click', function(e) {
                 var t = e.target;
                 if (t && t.closest && t.closest('a')) return; // Links normal folgen
                 var x = e.clientX / window.innerWidth;
-                if (x <= 0.3) pageBackward();
-                else if (x >= 0.7) pageForward();
-                else AndroidReader.onToggleMenu();
+                if (x <= 0.3) F.prev();
+                else if (x >= 0.7) F.next();
+                else if (window.AndroidReader) AndroidReader.onToggleMenu();
             }, true);
+
+            var touchX = 0, touchY = 0, touchT = 0;
+            document.addEventListener('touchstart', function(e) {
+                if (e.touches.length !== 1) return;
+                touchX = e.touches[0].clientX;
+                touchY = e.touches[0].clientY;
+                touchT = Date.now();
+            }, { passive: true });
+            document.addEventListener('touchend', function(e) {
+                var c = e.changedTouches[0];
+                if (!c) return;
+                var dx = c.clientX - touchX;
+                var dy = c.clientY - touchY;
+                var dt = Date.now() - touchT;
+                if (dt < 600 && Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+                    if (dx < 0) F.next(); else F.prev();
+                }
+            }, { passive: true });
+
+            window.addEventListener('resize', function() {
+                clearTimeout(F.resizeTimer);
+                F.resizeTimer = setTimeout(function() { F.layout(); }, 150);
+            });
+
+            // Bilder/Schriften laden verzögert – mehrstufig nachpaginieren;
+            // der Zeichen-Anker hält die Position dabei wortgenau.
+            setTimeout(F.layout, 0);
+            setTimeout(F.layout, 150);
+            setTimeout(F.layout, 450);
+            window.addEventListener('load', function() { F.layout(); });
+        } else {
+            F.layout();
         }
     })();
     """.trimIndent()
 }
+
+/** Kapselt einen String sicher als JS-Literal. */
+private fun jsString(s: String): String =
+    "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 // ---------------------------------------------------------------------------
 // Systemleisten im Lesemodus ausblenden

@@ -17,3 +17,9 @@ data class SmbSettings(
 }
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK, AMOLED }
+
+/**
+ * Seitenlayout im Reader. AUTO wählt ab ~600 dp Fensterbreite (aufgeklapptes
+ * Foldable, Tablet quer) automatisch die zweiseitige Darstellung.
+ */
+enum class PageLayoutMode { AUTO, SINGLE, DOUBLE }

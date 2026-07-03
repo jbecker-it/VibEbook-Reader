@@ -17,8 +17,14 @@ data class ReadingProgress(
     val bookId: String,
     /** Index im Spine (aktuelles Kapitel). */
     val spineIndex: Int,
-    /** Scrollposition innerhalb des Kapitels, 0.0 .. 1.0. */
+    /** Position innerhalb des Kapitels als Anteil 0.0 .. 1.0 (Fallback). */
     val scrollFraction: Float,
+    /**
+     * Wortgenauer Anker: Zeichen-Offset des ersten sichtbaren Worts im
+     * Kapiteltext. Geräteunabhängig, da alle Geräte dieselbe EPUB-Datei
+     * rendern; -1 = unbekannt (dann greift [scrollFraction]).
+     */
+    val charOffset: Int = -1,
     /** Epoch-Millis der letzten Lese-Aktualisierung. */
     val updatedAt: Long,
     /** Gerät, das diesen Stand zuletzt geschrieben hat (nur informativ). */
@@ -32,6 +38,7 @@ data class ReadingProgress(
         put("bookId", bookId)
         put("spineIndex", spineIndex)
         put("scrollFraction", scrollFraction.toDouble())
+        put("charOffset", charOffset)
         put("updatedAt", updatedAt)
         put("deviceId", deviceId)
         put("finished", finished)
@@ -41,7 +48,7 @@ data class ReadingProgress(
     }.toString()
 
     companion object {
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
 
         fun fromJson(raw: String): ReadingProgress {
             val o = JSONObject(raw)
@@ -49,6 +56,7 @@ data class ReadingProgress(
                 bookId = o.getString("bookId"),
                 spineIndex = o.optInt("spineIndex", 0),
                 scrollFraction = o.optDouble("scrollFraction", 0.0).toFloat(),
+                charOffset = o.optInt("charOffset", -1),
                 updatedAt = o.optLong("updatedAt", 0L),
                 deviceId = o.optString("deviceId", "unknown"),
                 finished = o.optBoolean("finished", false),
@@ -58,7 +66,8 @@ data class ReadingProgress(
         }
 
         /**
-         * Feldweiser Merge zweier Stände: Leseposition (+finished) vom Stand
+         * Feldweiser Merge zweier Stände: Leseposition inkl. [charOffset]
+         * (+finished) vom Stand
          * mit dem neueren [updatedAt], Favorit vom Stand mit dem neueren
          * [favoriteUpdatedAt]. Das Ergebnis kann Felder beider Seiten mischen.
          */
