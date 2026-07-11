@@ -64,6 +64,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.folio.reader.domain.model.PageLayoutMode
 import java.io.File
@@ -93,6 +96,18 @@ fun ReaderScreen(
 
     BackHandler { onBack() }
     DisposableEffect(bookId) { onDispose { viewModel.saveNow() } }
+
+    // Auch bei ON_STOP speichern: App in den Hintergrund, Display aus oder
+    // Foldable zugeklappt – nicht nur beim Navigieren zurück.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) viewModel.saveNow()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     HideSystemBars(hidden = !menuVisible)
 
     val colorScheme = MaterialTheme.colorScheme
@@ -521,6 +536,14 @@ private fun buildInjection(
 
         F.layout = function() {
             var W = window.innerWidth, H = window.innerHeight;
+            // Während eines Display-Wechsels (Foldable auf-/zuklappen) kann das
+            // Fenster kurz 0 groß sein – dann nicht layouten, sonst landet man
+            // am Kapitelanfang. Kurz darauf erneut versuchen.
+            if (W <= 0 || H <= 0 || !document.body) {
+                clearTimeout(F.retryTimer);
+                F.retryTimer = setTimeout(F.layout, 120);
+                return;
+            }
             var GAP = 48, PH = 24, PV = 28;
             var k = F.twoPage ? 2 : 1;
             var C = Math.floor((W - 2 * PH - (k - 1) * GAP) / k);
@@ -540,15 +563,22 @@ private fun buildInjection(
             if (target < 0) {
                 target = F.screens <= 1 ? 0 : Math.round(F.fraction * (F.screens - 1));
             }
-            F.setScreen(target, false);
+            F.setScreen(target, false, false);
         };
 
-        F.setScreen = function(i, smooth) {
+        /**
+         * [fromUser]: true bei echtem Blättern/Springen – nur dann wird der
+         * Zeichen-Anker neu bestimmt. Layout-Wiederherstellungen (Resize,
+         * Fold/Unfold, Nachpaginieren) lassen den Anker unverändert, sonst
+         * driftet die Position mit jedem Re-Layout um Seiten weiter.
+         */
+        F.setScreen = function(i, smooth, fromUser) {
             i = Math.max(0, Math.min(F.screens - 1, i));
             F.screen = i;
             if (F.screens > 1) F.fraction = i / (F.screens - 1);
-            var a = F.offsetForPage(i);
-            if (a >= 0) F.anchor = a;
+            if (fromUser) {
+                F.anchor = F.offsetForPage(i);
+            }
             window.scrollTo({
                 left: i * F.step,
                 top: 0,
@@ -561,7 +591,7 @@ private fun buildInjection(
 
         F.next = function() {
             if (F.screen < F.screens - 1) {
-                F.setScreen(F.screen + 1, true);
+                F.setScreen(F.screen + 1, true, true);
             } else {
                 F.fraction = 1;
                 if (window.AndroidReader) {
@@ -573,7 +603,7 @@ private fun buildInjection(
 
         F.prev = function() {
             if (F.screen > 0) {
-                F.setScreen(F.screen - 1, true);
+                F.setScreen(F.screen - 1, true, true);
             } else {
                 if (window.AndroidReader) AndroidReader.onPrevChapter();
             }

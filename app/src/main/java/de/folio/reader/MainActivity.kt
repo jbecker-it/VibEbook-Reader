@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import dagger.hilt.android.AndroidEntryPoint
 import de.folio.reader.data.settings.SettingsRepository
+import de.folio.reader.data.sync.SyncManager
 import de.folio.reader.domain.model.ThemeMode
 import de.folio.reader.ui.FolioApp
 import de.folio.reader.ui.theme.FolioTheme
@@ -20,6 +21,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var syncManager: SyncManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -32,5 +34,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Beim Öffnen der App (bzw. Rückkehr in den Vordergrund) die
+        // Lesefortschritte automatisch mit dem NAS abgleichen.
+        syncManager.syncProgressNow()
     }
 }

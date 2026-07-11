@@ -229,6 +229,16 @@ class BookRepository @Inject constructor(
         }
     }
 
+    /**
+     * Leichtgewichtiger Abgleich nur der Lesefortschritte aller Bücher –
+     * z.B. beim App-Start, ohne die komplette Bibliothek zu synchronisieren.
+     */
+    suspend fun syncAllProgress() {
+        val settings = settingsRepo.currentSmbSettings()
+        if (!settings.isConfigured) return
+        syncAllProgress(settings)
+    }
+
     private suspend fun syncAllProgress(settings: SmbSettings) {
         bookDao.getAll().forEach { entity ->
             runCatching { syncProgress(entity.id) }

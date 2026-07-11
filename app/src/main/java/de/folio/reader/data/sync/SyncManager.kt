@@ -76,6 +76,14 @@ class SyncManager @Inject constructor(
             }
         }
 
+    /**
+     * Nur die Lesefortschritte abgleichen – schnell und ohne Downloads.
+     * Wird beim App-Start bzw. bei Rückkehr in den Vordergrund aufgerufen.
+     */
+    fun syncProgressNow() {
+        scope.launch { runCatching { bookRepository.syncAllProgress() } }
+    }
+
     /** Sofortige, einmalige Synchronisierung. */
     suspend fun syncNow() {
         val wifiOnly = settingsRepo.wifiOnly.first()

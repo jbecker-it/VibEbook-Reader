@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -22,6 +23,13 @@ class ProgressRepository @Inject constructor(
 ) {
     private val dir: File by lazy { File(context.filesDir, "progress").apply { mkdirs() } }
 
+    /**
+     * In-Memory-Spiegel der Fortschrittsdateien. Der Cache wird beim Schreiben
+     * sofort aktualisiert, damit ein direkt darauf folgendes Öffnen des Buches
+     * nie einen veralteten Stand von der Platte liest.
+     */
+    private val cache = ConcurrentHashMap<String, ReadingProgress>()
+
     private val _changes = MutableSharedFlow<String>(extraBufferCapacity = 64)
     /** Emittiert die bookId, sobald sich ein lokaler Fortschritt geändert hat. */
     val changes: SharedFlow<String> = _changes
@@ -29,20 +37,25 @@ class ProgressRepository @Inject constructor(
     private fun fileFor(bookId: String) = File(dir, "$bookId.json")
 
     suspend fun read(bookId: String): ReadingProgress? = withContext(Dispatchers.IO) {
+        cache[bookId]?.let { return@withContext it }
         val f = fileFor(bookId)
         if (!f.exists()) return@withContext null
         runCatching { ReadingProgress.fromJson(f.readText()) }.getOrNull()
+            ?.also { cache[it.bookId] = it }
     }
 
     suspend fun readAll(): Map<String, ReadingProgress> = withContext(Dispatchers.IO) {
-        dir.listFiles { f -> f.extension == "json" }
+        val fromDisk = dir.listFiles { f -> f.extension == "json" }
             ?.mapNotNull { f -> runCatching { ReadingProgress.fromJson(f.readText()) }.getOrNull() }
             ?.associateBy { it.bookId }
             ?: emptyMap()
+        // Cache gewinnt: er enthält ggf. Schreibvorgänge, die noch nicht auf der Platte sind.
+        fromDisk + cache
     }
 
     /** Schreibt lokal und stößt eine spätere Synchronisierung an. */
     suspend fun write(progress: ReadingProgress, notify: Boolean = true) = withContext(Dispatchers.IO) {
+        cache[progress.bookId] = progress
         fileFor(progress.bookId).writeText(progress.toJson())
         if (notify) _changes.tryEmit(progress.bookId)
     }
