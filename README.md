@@ -11,6 +11,7 @@ Kotlin, Compose, Room, DataStore, Hilt, WorkManager, OkHttp und WebView.
 4. Verbindung testen, speichern, dann in der Bibliothek synchronisieren.
 
 Der Verbindungstest liest den Bücherordner, verändert aber keine gespeicherten Einstellungen.
+Diese erste Version bindet eine Installation nach einem erfolgreichen Scan mit Büchern an Server, Benutzer und Bücherordner, damit fremde Bibliotheken nicht versehentlich vorhandene Pfad-IDs übernehmen. App-Passwort und Fortschrittsordner können geändert werden. Ein sicherer Bibliothekswechsel benötigt eine spätere explizite Migration.
 Die Fortschrittsablage benötigt Schreibrechte; entsprechende Fehler erscheinen beim Sync.
 Nur HTTPS mit gültigem Zertifikat wird akzeptiert. Bei einer Weiterleitung muss die endgültige Serveradresse eingetragen werden. Öffentliche Freigabelinks und E2E-verschlüsselte Ordner werden nicht unterstützt.
 

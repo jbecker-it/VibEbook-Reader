@@ -46,6 +46,7 @@ class SettingsRepository @Inject constructor(
         val WIFI_ONLY = booleanPreferencesKey("sync_wifi_only")
         val EINK = booleanPreferencesKey("eink_mode")
         val DEVICE_ID = stringPreferencesKey("device_id")
+        val LIBRARY_BOUND = booleanPreferencesKey("nextcloud_library_bound")
     }
 
     val nextcloudSettings: Flow<NextcloudSettings> = context.dataStore.data.map { p ->
@@ -105,18 +106,30 @@ class SettingsRepository @Inject constructor(
 
     suspend fun saveNextcloudSettings(s: NextcloudSettings) {
         s.validate()
+        val previous = currentNextcloudSettings()
+        if (context.dataStore.data.first()[Keys.LIBRARY_BOUND] == true) {
+            require(previous.serverUrl.trimEnd('/') == s.serverUrl.trim().trimEnd('/') &&
+                previous.username == s.username.trim() && previous.rootPath.trim('/') == s.rootPath.trim('/')) {
+                "Diese Installation ist an eine Bibliothek gebunden. Server, Benutzer und Bücherordner können nicht ohne Datenmigration gewechselt werden. Das App-Passwort kann erneuert werden."
+            }
+        }
         val encrypted = cipher.encrypt(s.password)
         context.dataStore.edit { p ->
             p[Keys.SERVER] = s.serverUrl.trim().trimEnd('/')
-            p[Keys.USER] = s.username
+            p[Keys.USER] = s.username.trim()
             p[Keys.PASS] = encrypted
-            p[Keys.ROOT] = s.rootPath
-            p[Keys.PROGRESS_DIR] = s.progressDir
+            p[Keys.ROOT] = NextcloudSettings.segments(s.rootPath).joinToString("/")
+            p[Keys.PROGRESS_DIR] = NextcloudSettings.segments(s.progressDir).joinToString("/")
         }
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { it[Keys.THEME] = mode.name }
+    }
+
+    suspend fun bindLibrary(settings: NextcloudSettings) {
+        require(currentNextcloudSettings() == settings) { "Verbindung wurde geändert. Erneut synchronisieren." }
+        context.dataStore.edit { it[Keys.LIBRARY_BOUND] = true }
     }
 
     suspend fun setPageLayout(mode: PageLayoutMode) {

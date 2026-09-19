@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +56,7 @@ class BookRepository @Inject constructor(
 
     /**
      * Gleicht die Bibliothek mit dem Nextcloud ab: neue Bücher werden registriert und
-     * heruntergeladen, entfernte gelöscht. Anschließend werden alle Fortschritte
+     * heruntergeladen, entfernte lokal behalten. Anschließend werden alle Fortschritte
      * synchronisiert. [onProgress] meldet Status-Text und – wo bekannt – den
      * Fortschrittsanteil 0..1 (null = unbestimmt).
      */
@@ -66,6 +67,7 @@ class BookRepository @Inject constructor(
         onProgress("Bücher auf dem Nextcloud suchen …", null)
         val rootPrefix = settings.rootPath.trim('/', '\\')
         val remote = nextcloudClient.listEpubs(settings)
+        if (remote.isNotEmpty()) settingsRepo.bindLibrary(settings)
 
         val keepIds = mutableListOf<String>()
         val total = remote.size.coerceAtLeast(1)
@@ -208,6 +210,8 @@ class BookRepository @Inject constructor(
      * zusätzlich in die lokale DB gespiegelt, damit die UI ihn sofort zeigt.
      */
     suspend fun syncProgress(bookId: String) = progressMutex.withLock {
+        val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
+        if (connectivity.activeNetwork == null || (settingsRepo.wifiOnly.first() && connectivity.isActiveNetworkMetered)) return@withLock
         val settings = settingsRepo.currentNextcloudSettings()
         if (!settings.isConfigured) return@withLock
         if (bookDao.getById(bookId)?.missingRemotely == true) return@withLock
@@ -229,8 +233,9 @@ class BookRepository @Inject constructor(
 
         // Favorit aus dem Merge-Ergebnis in die lokale DB übernehmen.
         bookDao.getById(bookId)?.let { entity ->
-            if (entity.favorite != merged.favorite) {
-                bookDao.setFavorite(bookId, merged.favorite)
+            val currentFavorite = progressRepo.read(bookId)?.favorite ?: merged.favorite
+            if (entity.favorite != currentFavorite) {
+                bookDao.setFavorite(bookId, currentFavorite)
             }
         }
     }

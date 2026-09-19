@@ -172,6 +172,7 @@ class ReaderViewModel @Inject constructor(
         val fraction = lastScrollFraction
         val anchor = lastCharOffset
         val finished = s.spineIndex >= book.spine.lastIndex && fraction > 0.98f
+        val capturedAt = System.currentTimeMillis()
         appScope.launch {
             bookRepository.saveProgress(
                 ReadingProgress(
@@ -179,7 +180,7 @@ class ReaderViewModel @Inject constructor(
                     spineIndex = s.spineIndex,
                     scrollFraction = fraction,
                     charOffset = anchor,
-                    updatedAt = System.currentTimeMillis(),
+                    updatedAt = capturedAt,
                     deviceId = settingsRepository.deviceId(),
                     finished = finished,
                 )

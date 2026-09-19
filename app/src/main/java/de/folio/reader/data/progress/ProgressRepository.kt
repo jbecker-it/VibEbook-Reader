@@ -40,8 +40,8 @@ class ProgressRepository @Inject constructor(
     suspend fun read(bookId: String): ReadingProgress? = withContext(Dispatchers.IO) {
         cache[bookId]?.let { return@withContext it }
         val f = fileFor(bookId)
-        if (!f.exists()) return@withContext null
-        runCatching { ReadingProgress.fromJson(f.readText()) }.getOrNull()
+        if (!f.exists() && !File(f.path + ".bak").exists()) return@withContext null
+        runCatching { ReadingProgress.fromJson(android.util.AtomicFile(f).openRead().bufferedReader().use { it.readText() }) }.getOrNull()
             ?.also { cache[it.bookId] = it }
     }
 

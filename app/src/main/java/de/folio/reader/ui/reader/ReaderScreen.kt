@@ -103,7 +103,7 @@ fun ReaderScreen(
         if (readerPreferences.lockOrientation) activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LOCKED
         onDispose {
             readerView.keepScreenOn = oldKeepScreenOn
-            if (oldOrientation != null) activity.requestedOrientation = oldOrientation
+            if (oldOrientation != null) activity?.requestedOrientation = oldOrientation
         }
     }
 
@@ -336,6 +336,12 @@ private fun EpubWebView(
     bridge.prevChapterListener = onPrevChapter
 
     val webViewRef = remember { arrayOfNulls<WebView>(1) }
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewRef[0]?.apply { stopLoading(); removeJavascriptInterface("AndroidReader"); destroy() }
+            webViewRef[0] = null
+        }
+    }
     val lastLoaded = remember { arrayOfNulls<String>(1) }
     val injection = remember { arrayOf("") }
     injection[0] = buildInjection(
@@ -356,6 +362,10 @@ private fun EpubWebView(
             WebView(ctx).apply {
                 settings.javaScriptEnabled = true
                 settings.allowFileAccess = true
+                settings.allowContentAccess = false
+                settings.allowFileAccessFromFileURLs = false
+                settings.allowUniversalAccessFromFileURLs = false
+                settings.blockNetworkLoads = true
                 settings.builtInZoomControls = false
                 settings.textZoom = 100
                 isVerticalScrollBarEnabled = false
@@ -364,6 +374,16 @@ private fun EpubWebView(
                 addJavascriptInterface(bridge, "AndroidReader")
                 setBackgroundColor(android.graphics.Color.parseColor(backgroundHex))
                 webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
+                        return request.url.buildUpon().fragment(null).build().toString() != Uri.fromFile(File(lastLoaded[0] ?: filePath)).toString()
+                    }
+                    override fun shouldInterceptRequest(view: WebView, request: android.webkit.WebResourceRequest): android.webkit.WebResourceResponse? {
+                        val root = File(ctx.filesDir, "books").canonicalPath + File.separator
+                        val allowed = request.url.scheme == "file" && runCatching {
+                            File(request.url.path.orEmpty()).canonicalPath.startsWith(root)
+                        }.getOrDefault(false)
+                        return if (allowed) null else android.webkit.WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                    }
                     override fun onPageFinished(view: WebView, url: String?) {
                         view.evaluateJavascript(injection[0], null)
                     }

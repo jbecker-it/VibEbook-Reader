@@ -169,9 +169,10 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
                 val item = responses.item(index) as Element
                 fun text(element: Element, name: String) = element.getElementsByTagNameNS("DAV:", name).item(0)?.textContent
                 val href = text(item, "href") ?: throw IOException("WebDAV-Pfad fehlt.")
-                val url = requested.resolve(href) ?: throw IOException("Ungültiger WebDAV-Pfad.")
+                val url = requested.newBuilder().addPathSegment("").build().resolve(href) ?: throw IOException("Ungültiger WebDAV-Pfad.")
                 require(url.scheme == base.scheme && url.host == base.host && url.port == base.port) { "Fremder WebDAV-Server in Antwort." }
                 val segments = url.pathSegments.filter { it.isNotEmpty() }
+                require(segments.none { '/' in it || '\\' in it }) { "Mehrdeutiger WebDAV-Pfad." }
                 if (segments == requestedSegments) return@mapNotNull null
                 require(segments.take(requestedSegments.size) == requestedSegments && segments.size == requestedSegments.size + 1) { "WebDAV-Antwort außerhalb des angefragten Ordners." }
                 require(segments.take(baseSegments.size) == baseSegments) { "Ungültiger WebDAV-Pfad." }
