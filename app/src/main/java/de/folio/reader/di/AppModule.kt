@@ -10,7 +10,7 @@ import dagger.hilt.components.SingletonComponent
 import de.folio.reader.data.epub.EpubParser
 import de.folio.reader.data.local.BookDao
 import de.folio.reader.data.local.FolioDatabase
-import de.folio.reader.data.smb.SmbClient
+import de.folio.reader.data.nextcloud.NextcloudClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,8 +40,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): FolioDatabase =
         Room.databaseBuilder(context, FolioDatabase::class.java, "folio.db")
-            .addMigrations(FolioDatabase.MIGRATION_1_2)
-            .fallbackToDestructiveMigration()
+            .addMigrations(FolioDatabase.MIGRATION_1_2, FolioDatabase.MIGRATION_2_3)
             .build()
 
     @Provides
@@ -49,7 +48,7 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideSmbClient(): SmbClient = SmbClient()
+    fun provideNextcloudClient(): NextcloudClient = NextcloudClient()
 
     @Provides
     @Singleton

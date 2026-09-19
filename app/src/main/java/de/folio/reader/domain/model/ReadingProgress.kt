@@ -7,7 +7,7 @@ import org.json.JSONObject
  * und Favorit.
  *
  * Wird pro Buch als eigene JSON-Datei gespeichert (lokal in
- * filesDir/progress/<id>.json) und bei nächster Gelegenheit per SMB auf das NAS
+ * filesDir/progress/<id>.json) und bei nächster Gelegenheit per Nextcloud auf das Nextcloud
  * synchronisiert. Der Abgleich erfolgt FELDWEISE per Last-Write-Wins:
  * Leseposition/finished hängen an [updatedAt], der Favorit an
  * [favoriteUpdatedAt]. So überschreibt Weiterlesen auf Gerät B nicht das

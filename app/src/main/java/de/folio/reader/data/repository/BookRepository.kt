@@ -8,14 +8,18 @@ import de.folio.reader.data.local.BookEntity
 import de.folio.reader.data.progress.BookId
 import de.folio.reader.data.progress.ProgressRepository
 import de.folio.reader.data.settings.SettingsRepository
-import de.folio.reader.data.smb.SmbClient
+import de.folio.reader.data.nextcloud.NextcloudClient
 import de.folio.reader.domain.model.Book
 import de.folio.reader.domain.model.ReadingProgress
-import de.folio.reader.domain.model.SmbSettings
+import de.folio.reader.domain.model.NextcloudSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.io.File
 import javax.inject.Inject
@@ -25,11 +29,13 @@ import javax.inject.Singleton
 class BookRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val bookDao: BookDao,
-    private val smbClient: SmbClient,
+    private val nextcloudClient: NextcloudClient,
     private val epubParser: EpubParser,
     private val progressRepo: ProgressRepository,
     private val settingsRepo: SettingsRepository,
 ) {
+    private val libraryMutex = Mutex()
+    private val progressMutex = Mutex()
     private val booksDir: File by lazy { File(context.filesDir, "books").apply { mkdirs() } }
 
     fun observeBooks(): Flow<List<Book>> =
@@ -48,30 +54,30 @@ class BookRepository @Inject constructor(
     // ---- Bibliotheks-Sync -------------------------------------------------
 
     /**
-     * Gleicht die Bibliothek mit dem NAS ab: neue Bücher werden registriert und
+     * Gleicht die Bibliothek mit dem Nextcloud ab: neue Bücher werden registriert und
      * heruntergeladen, entfernte gelöscht. Anschließend werden alle Fortschritte
      * synchronisiert. [onProgress] meldet Status-Text und – wo bekannt – den
      * Fortschrittsanteil 0..1 (null = unbestimmt).
      */
-    suspend fun syncLibrary(onProgress: suspend (message: String, fraction: Float?) -> Unit = { _, _ -> }) {
-        val settings = settingsRepo.currentSmbSettings()
-        if (!settings.isConfigured) throw IllegalStateException("NAS nicht konfiguriert")
+    suspend fun syncLibrary(onProgress: suspend (message: String, fraction: Float?) -> Unit = { _, _ -> }) = libraryMutex.withLock {
+        val settings = settingsRepo.currentNextcloudSettings()
+        if (!settings.isConfigured) throw IllegalStateException("Nextcloud nicht konfiguriert")
 
-        onProgress("Bücher auf dem NAS suchen …", null)
+        onProgress("Bücher auf dem Nextcloud suchen …", null)
         val rootPrefix = settings.rootPath.trim('/', '\\')
-        val remote = smbClient.listEpubs(settings)
+        val remote = nextcloudClient.listEpubs(settings)
 
         val keepIds = mutableListOf<String>()
         val total = remote.size.coerceAtLeast(1)
         remote.forEachIndexed { index, entry ->
-            val libraryRel = entry.relativePath.removePrefix(rootPrefix).trim('/')
+            val libraryRel = if (rootPrefix.isEmpty()) entry.relativePath else entry.relativePath.removePrefix("$rootPrefix/")
             val id = BookId.fromPath(libraryRel)
             keepIds += id
 
             val existing = bookDao.getById(id)
             val needsDownload = existing == null ||
                 !existing.downloaded ||
-                existing.remoteModified != entry.modified
+                entry.etag.isBlank() || existing.remoteEtag != entry.etag || existing.sizeBytes != entry.size
 
             if (existing == null) {
                 bookDao.upsert(
@@ -84,7 +90,7 @@ class BookRepository @Inject constructor(
                         spineJson = "[]",
                         downloaded = false,
                         sizeBytes = entry.size,
-                        remoteModified = entry.modified,
+                        remoteModified = 0L,
                         favorite = false,
                     )
                 )
@@ -95,32 +101,28 @@ class BookRepository @Inject constructor(
                     "Lade „${libraryRel.substringAfterLast('/')}\" (${index + 1}/$total) …",
                     index.toFloat() / total,
                 )
-                downloadAndExtract(settings, id, libraryRel, entry.modified, entry.size)
+                downloadAndExtract(settings, id, libraryRel, entry.etag, entry.size)
             }
         }
 
-        // Lokal entfernen, was es auf dem NAS nicht mehr gibt.
-        val removed = bookDao.getAll().filter { it.id !in keepIds }
-        removed.forEach { File(booksDir, it.id).deleteRecursively() }
-        if (keepIds.isNotEmpty()) bookDao.deleteMissing(keepIds) else {
-            removed.forEach { bookDao.delete(it.id) }
-        }
+        // Only mark absence after a complete successful scan. Never remove offline data.
+        bookDao.getAll().forEach { bookDao.setMissing(it.id, it.id !in keepIds) }
 
         onProgress("Lesefortschritt synchronisieren …", null)
         syncAllProgress(settings)
         onProgress("Fertig", 1f)
     }
 
-    suspend fun downloadBook(id: String) {
-        val settings = settingsRepo.currentSmbSettings()
-        val entity = bookDao.getById(id) ?: return
-        downloadAndExtract(settings, id, entity.relativePath, entity.remoteModified, entity.sizeBytes)
+    suspend fun downloadBook(id: String) = libraryMutex.withLock {
+        val settings = settingsRepo.currentNextcloudSettings()
+        val entity = bookDao.getById(id) ?: return@withLock
+        downloadAndExtract(settings, id, entity.relativePath, entity.remoteEtag, entity.sizeBytes)
     }
 
     /**
      * Favorit umschalten: sofort in der lokalen DB (UI), zusätzlich in der
      * Metadaten-Datei des Buches mit eigenem Zeitstempel – die Änderung wird
-     * dadurch automatisch aufs NAS synchronisiert.
+     * dadurch automatisch aufs Nextcloud synchronisiert.
      */
     suspend fun toggleFavorite(id: String) {
         val entity = bookDao.getById(id) ?: return
@@ -139,26 +141,28 @@ class BookRepository @Inject constructor(
             favorite = newValue,
             favoriteUpdatedAt = System.currentTimeMillis(),
         )
-        // write() signalisiert über changes den SyncManager → NAS-Abgleich.
+        // write() signalisiert über changes den SyncManager → Nextcloud-Abgleich.
         progressRepo.write(meta)
     }
 
     private suspend fun downloadAndExtract(
-        settings: SmbSettings,
+        settings: NextcloudSettings,
         id: String,
         libraryRel: String,
-        remoteModified: Long,
+        etag: String,
         size: Long,
-    ) {
-        val sharePath = joinShare(settings.rootPath, libraryRel)
+    ) = withContext(Dispatchers.IO) {
+        val remotePath = joinPath(settings.rootPath, libraryRel)
         val tmp = File(context.cacheDir, "$id.epub")
-        smbClient.download(settings, sharePath, tmp)
+        nextcloudClient.download(settings, remotePath, tmp, etag)
 
-        val bookDir = File(booksDir, id)
-        epubParser.extract(tmp, bookDir)
-        tmp.delete()
-
-        val parsed = epubParser.parse(bookDir)
+        // Versioned extraction keeps the currently readable copy intact until indexing succeeds.
+        val bookDir = File(booksDir, "$id-${java.util.UUID.randomUUID()}")
+        val parsed = try {
+            epubParser.extract(tmp, bookDir)
+            epubParser.parse(bookDir).also { require(it.spine.isNotEmpty()) { "EPUB enthält keine lesbaren Kapitel." } }
+        } catch (e: Exception) { bookDir.deleteRecursively(); throw e
+        } finally { tmp.delete() }
         val existing = bookDao.getById(id)
         bookDao.upsert(
             BookEntity(
@@ -170,7 +174,8 @@ class BookRepository @Inject constructor(
                 spineJson = JSONArray(parsed.spine).toString(),
                 downloaded = parsed.spine.isNotEmpty(),
                 sizeBytes = size,
-                remoteModified = remoteModified,
+                remoteModified = 0L,
+                remoteEtag = etag,
                 favorite = existing?.favorite ?: false,
             )
         )
@@ -179,7 +184,7 @@ class BookRepository @Inject constructor(
     // ---- Fortschritt ------------------------------------------------------
 
     /**
-     * Leseposition lokal speichern und auf dem NAS ablegen (sofern erreichbar).
+     * Leseposition lokal speichern und auf dem Nextcloud ablegen (sofern erreichbar).
      * Favoriten-Felder werden aus dem vorhandenen lokalen Stand übernommen,
      * damit das Weiterlesen den Favorit nicht zurücksetzt.
      */
@@ -194,7 +199,6 @@ class BookRepository @Inject constructor(
             progress
         }
         progressRepo.write(enriched)
-        runCatching { syncProgress(progress.bookId) }
     }
 
     /**
@@ -203,19 +207,21 @@ class BookRepository @Inject constructor(
      * wird auf die jeweils veraltete Seite geschrieben. Der Favorit wird
      * zusätzlich in die lokale DB gespiegelt, damit die UI ihn sofort zeigt.
      */
-    suspend fun syncProgress(bookId: String) {
-        val settings = settingsRepo.currentSmbSettings()
-        if (!settings.isConfigured) return
+    suspend fun syncProgress(bookId: String) = progressMutex.withLock {
+        val settings = settingsRepo.currentNextcloudSettings()
+        if (!settings.isConfigured) return@withLock
+        if (bookDao.getById(bookId)?.missingRemotely == true) return@withLock
         val remotePath = progressFilePath(settings, bookId)
 
         val local = progressRepo.read(bookId)
-        val remote = smbClient.readTextOrNull(settings, remotePath)
-            ?.let { runCatching { ReadingProgress.fromJson(it) }.getOrNull() }
+        val remoteFile = nextcloudClient.readTextOrNull(settings, remotePath)
+        val remote = remoteFile?.let { ReadingProgress.fromJson(it.content) }
+        require(remote == null || remote.bookId == bookId) { "Fortschrittsdatei gehört zu einem anderen Buch." }
 
-        val merged = ReadingProgress.merge(local, remote) ?: return
+        val merged = ReadingProgress.merge(local, remote) ?: return@withLock
 
         if (merged != remote) {
-            smbClient.writeText(settings, remotePath, merged.toJson())
+            nextcloudClient.writeText(settings, remotePath, merged.toJson(), remoteFile)
         }
         if (merged != local) {
             progressRepo.write(merged, notify = true)
@@ -234,23 +240,23 @@ class BookRepository @Inject constructor(
      * z.B. beim App-Start, ohne die komplette Bibliothek zu synchronisieren.
      */
     suspend fun syncAllProgress() {
-        val settings = settingsRepo.currentSmbSettings()
+        val settings = settingsRepo.currentNextcloudSettings()
         if (!settings.isConfigured) return
         syncAllProgress(settings)
     }
 
-    private suspend fun syncAllProgress(settings: SmbSettings) {
+    private suspend fun syncAllProgress(settings: NextcloudSettings) {
         bookDao.getAll().forEach { entity ->
-            runCatching { syncProgress(entity.id) }
+            syncProgress(entity.id)
         }
     }
 
     // ---- Helpers ----------------------------------------------------------
 
-    private fun progressFilePath(settings: SmbSettings, bookId: String): String =
-        joinShare(settings.progressDir, "$bookId.json")
+    private fun progressFilePath(settings: NextcloudSettings, bookId: String): String =
+        joinPath(settings.progressDir, "$bookId.json")
 
-    private fun joinShare(vararg parts: String): String =
+    private fun joinPath(vararg parts: String): String =
         parts.filter { it.isNotBlank() }.joinToString("/") { it.trim('/', '\\') }
 
     private fun BookEntity.toBook(progress: ReadingProgress?): Book = Book(
@@ -264,6 +270,7 @@ class BookRepository @Inject constructor(
         sizeBytes = sizeBytes,
         progress = progress,
         favorite = favorite,
+        missingRemotely = missingRemotely,
     )
 
     private fun String.toStringList(): List<String> = runCatching {

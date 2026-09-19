@@ -37,6 +37,6 @@ interface BookDao {
     @Query("DELETE FROM books WHERE id = :id")
     suspend fun delete(id: String)
 
-    @Query("DELETE FROM books WHERE id NOT IN (:keepIds)")
-    suspend fun deleteMissing(keepIds: List<String>)
+    @Query("UPDATE books SET missingRemotely = :missing WHERE id = :id")
+    suspend fun setMissing(id: String, missing: Boolean)
 }

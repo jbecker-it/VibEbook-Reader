@@ -15,7 +15,7 @@ import javax.inject.Singleton
 /**
  * Verwaltet die lokalen Fortschrittsdateien (filesDir/progress/<id>.json).
  * Jeder Schreibvorgang signalisiert über [changes], dass eine Synchronisierung
- * mit dem NAS ansteht.
+ * mit dem Nextcloud ansteht.
  */
 @Singleton
 class ProgressRepository @Inject constructor(
@@ -29,6 +29,7 @@ class ProgressRepository @Inject constructor(
      * nie einen veralteten Stand von der Platte liest.
      */
     private val cache = ConcurrentHashMap<String, ReadingProgress>()
+    private val writeMutex = kotlinx.coroutines.sync.Mutex()
 
     private val _changes = MutableSharedFlow<String>(extraBufferCapacity = 64)
     /** Emittiert die bookId, sobald sich ein lokaler Fortschritt geändert hat. */
@@ -55,8 +56,15 @@ class ProgressRepository @Inject constructor(
 
     /** Schreibt lokal und stößt eine spätere Synchronisierung an. */
     suspend fun write(progress: ReadingProgress, notify: Boolean = true) = withContext(Dispatchers.IO) {
-        cache[progress.bookId] = progress
-        fileFor(progress.bookId).writeText(progress.toJson())
-        if (notify) _changes.tryEmit(progress.bookId)
+        writeMutex.lock()
+        try {
+            val merged = ReadingProgress.merge(read(progress.bookId), progress)!!
+            val file = android.util.AtomicFile(fileFor(merged.bookId))
+            val stream = file.startWrite()
+            try { stream.write(merged.toJson().toByteArray(Charsets.UTF_8)); file.finishWrite(stream) }
+            catch (e: Exception) { file.failWrite(stream); throw e }
+            cache[merged.bookId] = merged
+            if (notify) _changes.tryEmit(merged.bookId)
+        } finally { writeMutex.unlock() }
     }
 }

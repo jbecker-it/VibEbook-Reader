@@ -14,7 +14,9 @@ data class BookEntity(
     val spineJson: String,
     val downloaded: Boolean,
     val sizeBytes: Long,
-    /** Zeitstempel der Datei auf dem NAS – erkennt geänderte/neue Bücher. */
+    /** Zeitstempel der Datei auf dem Nextcloud – erkennt geänderte/neue Bücher. */
     val remoteModified: Long,
     val favorite: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "''") val remoteEtag: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "0") val missingRemotely: Boolean = false,
 )

@@ -42,8 +42,6 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
-            // smbj / bouncycastle bring duplicate notices
-            excludes += "META-INF/DEPENDENCIES"
         }
     }
 }
@@ -83,10 +81,10 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
 
-    // SMB / NAS
-    implementation(libs.smbj)
-    implementation(libs.bouncycastle)
-    implementation(libs.slf4j.simple)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 
     // Image loading (covers)
     implementation(libs.coil.compose)

@@ -44,7 +44,7 @@ class SyncManager @Inject constructor(
     private val workManager get() = WorkManager.getInstance(context)
 
     init {
-        // Jede lokale Fortschrittsänderung möglichst zeitnah aufs NAS bringen.
+        // Jede lokale Fortschrittsänderung möglichst zeitnah aufs Nextcloud bringen.
         scope.launch {
             progressRepo.changes.collect { bookId ->
                 runCatching { bookRepository.syncProgress(bookId) }
@@ -72,6 +72,8 @@ class SyncManager @Inject constructor(
                 }
                 infos.any { it.state == WorkInfo.State.ENQUEUED } ->
                     SyncStatus(running = true, message = "Warte auf Netzwerk …", fraction = null)
+                infos.any { it.state == WorkInfo.State.FAILED } ->
+                    SyncStatus(message = infos.first { it.state == WorkInfo.State.FAILED }.outputData.getString(SyncWorker.KEY_MESSAGE) ?: "Synchronisierung fehlgeschlagen")
                 else -> SyncStatus()
             }
         }

@@ -119,12 +119,14 @@ fun LibraryScreen(
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
             if (syncStatus.running) SyncBanner(syncStatus)
+            else syncStatus.message?.let { Text(it, modifier = Modifier.padding(16.dp)) }
+            if (!isConfigured && books.isNotEmpty()) Text("Offline-Bibliothek · Nextcloud in den Einstellungen verbinden", modifier = Modifier.padding(16.dp))
 
             when {
-                !isConfigured -> EmptyState(
+                !isConfigured && books.isEmpty() -> EmptyState(
                     icon = { Icon(Icons.Outlined.CloudOff, null) },
-                    title = "Noch kein NAS verbunden",
-                    message = "Hinterlege in den Einstellungen deine SMB-Zugangsdaten, um deine Bibliothek zu laden.",
+                    title = "Noch kein Nextcloud verbunden",
+                    message = "Hinterlege in den Einstellungen deine Nextcloud-Zugangsdaten, um deine Bibliothek zu laden.",
                     actionLabel = "Zu den Einstellungen",
                     onAction = onOpenSettings,
                 )
@@ -132,13 +134,19 @@ fun LibraryScreen(
                 books.isEmpty() -> EmptyState(
                     icon = { Icon(Icons.Outlined.MenuBook, null) },
                     title = "Bibliothek ist leer",
-                    message = if (syncStatus.running) "Suche Bücher auf dem NAS …"
-                    else "Tippe auf Synchronisieren, um Bücher vom NAS zu laden.",
+                    message = if (syncStatus.running) "Suche Bücher auf dem Nextcloud …"
+                    else "Tippe auf Synchronisieren, um Bücher vom Nextcloud zu laden.",
                     actionLabel = if (syncStatus.running) null else "Jetzt synchronisieren",
                     onAction = { viewModel.syncNow() },
                 )
 
                 else -> {
+                    reading.firstOrNull { it.downloaded }?.let { latest ->
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = { onBookSelected(latest.id) },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        ) { Text("Weiterlesen: ${latest.title}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
                     TabRow(selectedTabIndex = tab.ordinal) {
                         LibraryTab.entries.forEach { t ->
                             Tab(
@@ -384,7 +392,7 @@ private fun BookCard(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(6.dp)
-                    .size(32.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.35f))
                     .clickable(onClick = onToggleFavorite),
@@ -445,6 +453,7 @@ private fun BookCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        if (book.missingRemotely) Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)
     }
 }
 

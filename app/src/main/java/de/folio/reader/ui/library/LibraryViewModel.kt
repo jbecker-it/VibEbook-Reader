@@ -26,7 +26,7 @@ enum class LibraryTab(val label: String) {
     FAVORITES("Favoriten"),
 }
 
-/** Ein Unterordner im Bibliotheks-Browser (spiegelt die SMB-Ordnerstruktur). */
+/** Ein Unterordner im Bibliotheks-Browser (spiegelt die Nextcloud-Ordnerstruktur). */
 data class FolderItem(val path: String, val name: String, val bookCount: Int)
 
 data class BrowseContent(
@@ -47,7 +47,7 @@ class LibraryViewModel @Inject constructor(
     val syncStatus: StateFlow<SyncStatus> = syncManager.syncStatus
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SyncStatus())
 
-    val isConfigured: StateFlow<Boolean> = settingsRepository.smbSettings
+    val isConfigured: StateFlow<Boolean> = settingsRepository.nextcloudSettings
         .map { it.isConfigured }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 

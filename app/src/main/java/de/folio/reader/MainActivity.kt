@@ -28,7 +28,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.AMOLED)
-            FolioTheme(themeMode = themeMode) {
+            val eInk by settingsRepository.eInkMode.collectAsState(initial = false)
+            FolioTheme(themeMode = themeMode, eInk = eInk) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     FolioApp()
                 }
@@ -39,7 +40,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         // Beim Öffnen der App (bzw. Rückkehr in den Vordergrund) die
-        // Lesefortschritte automatisch mit dem NAS abgleichen.
+        // Lesefortschritte automatisch mit dem Nextcloud abgleichen.
         syncManager.syncProgressNow()
     }
 }

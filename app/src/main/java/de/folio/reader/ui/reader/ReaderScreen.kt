@@ -69,6 +69,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.folio.reader.domain.model.PageLayoutMode
+import de.folio.reader.domain.model.ReaderPreferences
+import android.view.KeyEvent
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -91,10 +93,23 @@ fun ReaderScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val pageLayout by viewModel.pageLayout.collectAsStateWithLifecycle()
     val eInk by viewModel.eInkMode.collectAsStateWithLifecycle()
+    val readerPreferences by viewModel.readerPreferences.collectAsStateWithLifecycle()
+    val readerView = LocalView.current
+    DisposableEffect(readerPreferences.lockOrientation, readerPreferences.keepScreenOn) {
+        val activity = readerView.context.findActivity()
+        val oldOrientation = activity?.requestedOrientation
+        val oldKeepScreenOn = readerView.keepScreenOn
+        readerView.keepScreenOn = readerPreferences.keepScreenOn
+        if (readerPreferences.lockOrientation) activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LOCKED
+        onDispose {
+            readerView.keepScreenOn = oldKeepScreenOn
+            if (oldOrientation != null) activity.requestedOrientation = oldOrientation
+        }
+    }
 
     var menuVisible by rememberSaveable { mutableStateOf(false) }
 
-    BackHandler { onBack() }
+    BackHandler { if (menuVisible) menuVisible = false else onBack() }
     DisposableEffect(bookId) { onDispose { viewModel.saveNow() } }
 
     // Auch bei ON_STOP speichern: App in den Hintergrund, Display aus oder
@@ -114,7 +129,7 @@ fun ReaderScreen(
     val bgHex = remember(colorScheme.background) { colorScheme.background.toCssHex() }
     val fgHex = remember(colorScheme.onBackground) { colorScheme.onBackground.toCssHex() }
     val linkHex = remember(colorScheme.primary) { colorScheme.primary.toCssHex() }
-    val forceColors = bgHex != "#FFFFFF"
+    val forceColors = eInk || bgHex != "#FFFFFF"
 
     val windowWidthDp = LocalConfiguration.current.screenWidthDp
     val twoPage = when (pageLayout) {
@@ -154,6 +169,8 @@ fun ReaderScreen(
                 textHex = fgHex,
                 linkHex = linkHex,
                 forceColors = forceColors,
+                preferences = readerPreferences,
+                menuVisible = menuVisible,
                 onPosition = viewModel::onPosition,
                 onToggleMenu = { menuVisible = !menuVisible },
                 onNextChapter = viewModel::nextChapter,
@@ -201,8 +218,8 @@ private fun TopOverlay(
     onToggleFavorite: () -> Unit,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        tonalElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -247,8 +264,8 @@ private fun BottomOverlay(
         .roundToInt().coerceIn(0, 100)
 
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        tonalElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
     ) {
         Column(
             modifier = Modifier
@@ -305,6 +322,8 @@ private fun EpubWebView(
     textHex: String,
     linkHex: String,
     forceColors: Boolean,
+    preferences: ReaderPreferences,
+    menuVisible: Boolean,
     onPosition: (Float, Int) -> Unit,
     onToggleMenu: () -> Unit,
     onNextChapter: () -> Unit,
@@ -322,11 +341,12 @@ private fun EpubWebView(
     injection[0] = buildInjection(
         restoreFraction, restoreCharOffset, twoPage, smoothTurns,
         backgroundHex, textHex, linkHex, forceColors,
+        preferences,
     )
 
     // Layout-/Themewechsel ohne Neuladen anwenden: erneut injizieren – das
     // Skript repaginiert und hält die Position über den Zeichen-Anker.
-    LaunchedEffect(twoPage, smoothTurns, backgroundHex, textHex, forceColors) {
+    LaunchedEffect(twoPage, smoothTurns, backgroundHex, textHex, forceColors, preferences) {
         webViewRef[0]?.evaluateJavascript(injection[0], null)
     }
 
@@ -352,10 +372,30 @@ private fun EpubWebView(
             }
         },
         update = { web ->
+            web.setOnKeyListener { _, keyCode, event ->
+                val command = when (keyCode) {
+                    KeyEvent.KEYCODE_PAGE_DOWN -> "next"
+                    KeyEvent.KEYCODE_PAGE_UP -> "prev"
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> if (!menuVisible) "next" else null
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (!menuVisible) "prev" else null
+                    KeyEvent.KEYCODE_VOLUME_DOWN -> if (preferences.volumeKeys && !menuVisible) "next" else null
+                    KeyEvent.KEYCODE_VOLUME_UP -> if (preferences.volumeKeys && !menuVisible) "prev" else null
+                    else -> null
+                }
+                if (command != null) {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) web.evaluateJavascript("window.__folio && window.__folio.$command();", null)
+                    true
+                } else if (keyCode == KeyEvent.KEYCODE_MENU || (!menuVisible && keyCode == KeyEvent.KEYCODE_DPAD_CENTER)) {
+                    if (event.action == KeyEvent.ACTION_UP) onToggleMenu()
+                    true
+                } else false
+            }
+            web.keepScreenOn = preferences.keepScreenOn
             web.setBackgroundColor(android.graphics.Color.parseColor(backgroundHex))
             if (lastLoaded[0] != filePath) {
                 lastLoaded[0] = filePath
                 web.loadUrl(Uri.fromFile(File(filePath)).toString())
+                web.requestFocus()
             }
         },
     )
@@ -410,6 +450,7 @@ private fun buildInjection(
     textHex: String,
     linkHex: String,
     forceColors: Boolean,
+    preferences: ReaderPreferences,
 ): String {
     val frac = restoreFraction.coerceIn(0f, 1f).toString()
     val colorRules = if (forceColors) {
@@ -420,7 +461,7 @@ private fun buildInjection(
     } else {
         "html,body{background:$backgroundHex;color:$textHex;}a{color:$linkHex;}"
     }
-    val colorScheme = if (forceColors) "dark" else "normal"
+    val colorScheme = if (backgroundHex == "#FFFFFF") "light" else "dark"
 
     return """
     (function() {
@@ -429,6 +470,8 @@ private fun buildInjection(
 
         F.twoPage = $twoPage;
         F.smoothTurns = $smoothTurns;
+        F.leftHanded = ${preferences.leftHanded};
+        F.zone = ${if (preferences.wideTapZones) "0.4" else "0.3"};
         F.colorRules = ${jsString(colorRules)};
         F.colorScheme = "$colorScheme";
         if (firstRun) {
@@ -544,7 +587,10 @@ private fun buildInjection(
                 F.retryTimer = setTimeout(F.layout, 120);
                 return;
             }
-            var GAP = 48, PH = 24, PV = 28;
+            var GAP = 48, PH = ${preferences.margin}, PV = 28;
+            document.body.style.setProperty('font-size', '${preferences.fontSize}px', 'important');
+            document.body.style.setProperty('font-family', '${if (preferences.sansSerif) "sans-serif" else "serif"}', 'important');
+            document.body.style.setProperty('line-height', '${preferences.lineHeight}', 'important');
             var k = F.twoPage ? 2 : 1;
             var C = Math.floor((W - 2 * PH - (k - 1) * GAP) / k);
             F.PH = PH;
@@ -617,8 +663,9 @@ private fun buildInjection(
                 var t = e.target;
                 if (t && t.closest && t.closest('a')) return; // Links normal folgen
                 var x = e.clientX / window.innerWidth;
-                if (x <= 0.3) F.prev();
-                else if (x >= 0.7) F.next();
+                if (Date.now() - (F.lastSwipe || 0) < 400) return;
+                if (x <= F.zone) { if (F.leftHanded) F.next(); else F.prev(); }
+                else if (x >= 1 - F.zone) { if (F.leftHanded) F.prev(); else F.next(); }
                 else if (window.AndroidReader) AndroidReader.onToggleMenu();
             }, true);
 
@@ -636,6 +683,7 @@ private fun buildInjection(
                 var dy = c.clientY - touchY;
                 var dt = Date.now() - touchT;
                 if (dt < 600 && Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+                    F.lastSwipe = Date.now();
                     if (dx < 0) F.next(); else F.prev();
                 }
             }, { passive: true });

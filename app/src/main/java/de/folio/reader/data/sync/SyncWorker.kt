@@ -26,9 +26,12 @@ class SyncWorker @AssistedInject constructor(
             )
         }
         Result.success()
+    } catch (e: kotlinx.coroutines.CancellationException) { throw e
     } catch (e: Exception) {
         // Verbindungsfehler im mobilen Netz: später erneut versuchen.
-        if (runAttemptCount < 3) Result.retry() else Result.failure()
+        val retryable = e is java.io.IOException && (e !is de.folio.reader.data.nextcloud.DavException || e.status in listOf(408, 412, 423, 429) || e.status >= 500)
+        if (retryable && runAttemptCount < 3) Result.retry()
+        else Result.failure(workDataOf(KEY_MESSAGE to (e.message?.take(500) ?: "Synchronisierung fehlgeschlagen")))
     }
 
     companion object {

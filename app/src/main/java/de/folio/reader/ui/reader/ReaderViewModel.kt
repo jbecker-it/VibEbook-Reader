@@ -42,6 +42,8 @@ class ReaderViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     @ApplicationScope private val appScope: CoroutineScope,
 ) : ViewModel() {
+    val readerPreferences = settingsRepository.readerPreferences
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), de.folio.reader.domain.model.ReaderPreferences())
 
     private val _state = MutableStateFlow(ReaderUiState())
     val state: StateFlow<ReaderUiState> = _state.asStateFlow()
@@ -64,8 +66,8 @@ class ReaderViewModel @Inject constructor(
         loadedId = bookId
         _state.value = ReaderUiState(loading = true)
         viewModelScope.launch {
-            // Vor dem Öffnen einmal mit dem NAS abgleichen, um den neuesten Stand
-            // zu holen – aber begrenzt, damit ein nicht erreichbares NAS das
+            // Vor dem Öffnen einmal mit dem Nextcloud abgleichen, um den neuesten Stand
+            // zu holen – aber begrenzt, damit ein nicht erreichbares Nextcloud das
             // Öffnen nicht blockiert.
             runCatching {
                 withTimeoutOrNull(5_000) { bookRepository.syncProgress(bookId) }
