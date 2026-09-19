@@ -108,6 +108,25 @@ fun ReaderScreen(
     }
 
     var menuVisible by rememberSaveable { mutableStateOf(false) }
+    var typographyVisible by remember { mutableStateOf(false) }
+    if (typographyVisible) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { typographyVisible = false },
+            title = { Text("Schrift und Layout") },
+            text = {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.TextButton(onClick = { viewModel.setReaderPreferences(readerPreferences.copy(fontSize = readerPreferences.fontSize - 2)) }) { Text("A−") }
+                        Text("${readerPreferences.fontSize}")
+                        androidx.compose.material3.TextButton(onClick = { viewModel.setReaderPreferences(readerPreferences.copy(fontSize = readerPreferences.fontSize + 2)) }) { Text("A+") }
+                    }
+                    androidx.compose.material3.TextButton(onClick = { viewModel.setReaderPreferences(readerPreferences.copy(sansSerif = !readerPreferences.sansSerif)) }) { Text(if (readerPreferences.sansSerif) "Schrift: Sans-Serif" else "Schrift: Serif") }
+                    Text("Weitere Lese- und Tastenoptionen in den Einstellungen.")
+                }
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { typographyVisible = false }) { Text("Fertig") } },
+        )
+    }
 
     BackHandler { if (menuVisible) menuVisible = false else onBack() }
     DisposableEffect(bookId) { onDispose { viewModel.saveNow() } }
@@ -151,7 +170,7 @@ fun ReaderScreen(
     ) {
         val book = state.book
         when {
-            state.loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            state.loading -> if (eInk) Text("Buch öffnen …", Modifier.align(Alignment.Center)) else CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
 
             book == null || book.spine.isEmpty() -> Text(
                 text = "Dieses Buch konnte nicht geöffnet werden.",
@@ -189,6 +208,7 @@ fun ReaderScreen(
                 favorite = state.favorite,
                 onBack = onBack,
                 onToggleFavorite = viewModel::toggleFavorite,
+                onTypography = { typographyVisible = true },
             )
         }
 
@@ -216,6 +236,7 @@ private fun TopOverlay(
     favorite: Boolean,
     onBack: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onTypography: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -231,6 +252,7 @@ private fun TopOverlay(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Zurück")
             }
+            androidx.compose.material3.TextButton(onClick = onTypography) { Text("Aa") }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
@@ -393,15 +415,7 @@ private fun EpubWebView(
         },
         update = { web ->
             web.setOnKeyListener { _, keyCode, event ->
-                val command = when (keyCode) {
-                    KeyEvent.KEYCODE_PAGE_DOWN -> "next"
-                    KeyEvent.KEYCODE_PAGE_UP -> "prev"
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> if (!menuVisible) "next" else null
-                    KeyEvent.KEYCODE_DPAD_LEFT -> if (!menuVisible) "prev" else null
-                    KeyEvent.KEYCODE_VOLUME_DOWN -> if (preferences.volumeKeys && !menuVisible) "next" else null
-                    KeyEvent.KEYCODE_VOLUME_UP -> if (preferences.volumeKeys && !menuVisible) "prev" else null
-                    else -> null
-                }
+                val command = ReaderKeys.command(keyCode, menuVisible, preferences.volumeKeys)
                 if (command != null) {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) web.evaluateJavascript("window.__folio && window.__folio.$command();", null)
                     true

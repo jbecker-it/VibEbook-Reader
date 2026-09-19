@@ -44,6 +44,9 @@ class ReaderViewModel @Inject constructor(
 ) : ViewModel() {
     val readerPreferences = settingsRepository.readerPreferences
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), de.folio.reader.domain.model.ReaderPreferences())
+    fun setReaderPreferences(value: de.folio.reader.domain.model.ReaderPreferences) {
+        viewModelScope.launch { settingsRepository.saveReaderPreferences(value) }
+    }
 
     private val _state = MutableStateFlow(ReaderUiState())
     val state: StateFlow<ReaderUiState> = _state.asStateFlow()

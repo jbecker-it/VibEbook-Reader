@@ -20,6 +20,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.util.concurrent.TimeUnit
@@ -42,12 +44,19 @@ class SyncManager @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val workManager get() = WorkManager.getInstance(context)
+    private val backgroundError = MutableStateFlow<String?>(null)
+
+    private suspend fun reportSync(block: suspend () -> Unit) {
+        try { block(); backgroundError.value = null }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { backgroundError.value = e.message ?: "Fortschrittsabgleich fehlgeschlagen" }
+    }
 
     init {
         // Jede lokale Fortschrittsänderung möglichst zeitnah aufs Nextcloud bringen.
         scope.launch {
             progressRepo.changes.collect { bookId ->
-                runCatching { bookRepository.syncProgress(bookId) }
+                reportSync { bookRepository.syncProgress(bookId) }
             }
         }
     }
@@ -59,6 +68,9 @@ class SyncManager @Inject constructor(
     /** Laufender Sync mit Status-Text und Fortschrittsanteil (null = unbestimmt). */
     val syncStatus: Flow<SyncStatus> = workManager
         .getWorkInfosForUniqueWorkFlow(WORK_ONE_TIME)
+        .combine(workManager.getWorkInfosForUniqueWorkFlow(WORK_PERIODIC)) { oneTime, periodic ->
+            oneTime + periodic.filter { it.state == WorkInfo.State.RUNNING }
+        }
         .map { infos ->
             val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
             when {
@@ -76,6 +88,8 @@ class SyncManager @Inject constructor(
                     SyncStatus(message = infos.first { it.state == WorkInfo.State.FAILED }.outputData.getString(SyncWorker.KEY_MESSAGE) ?: "Synchronisierung fehlgeschlagen")
                 else -> SyncStatus()
             }
+        }.combine(backgroundError) { status, error ->
+            if (!status.running && status.message == null && error != null) status.copy(message = error) else status
         }
 
     /**
@@ -83,7 +97,7 @@ class SyncManager @Inject constructor(
      * Wird beim App-Start bzw. bei Rückkehr in den Vordergrund aufgerufen.
      */
     fun syncProgressNow() {
-        scope.launch { runCatching { bookRepository.syncAllProgress() } }
+        scope.launch { reportSync { bookRepository.syncAllProgress() } }
     }
 
     /** Sofortige, einmalige Synchronisierung. */
