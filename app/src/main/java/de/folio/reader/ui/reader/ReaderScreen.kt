@@ -393,7 +393,7 @@ private fun EpubWebView(
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
                 overScrollMode = View.OVER_SCROLL_NEVER
-                addJavascriptInterface(bridge, "AndroidReader")
+                installReaderBridge(bridge)
                 setBackgroundColor(android.graphics.Color.parseColor(backgroundHex))
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
@@ -433,6 +433,11 @@ private fun EpubWebView(
             }
         },
     )
+}
+
+// A concrete parameter avoids lint treating Compose remember's inferred bridge as generic T.
+private fun WebView.installReaderBridge(bridge: ReaderBridge) {
+    addJavascriptInterface(bridge, "AndroidReader")
 }
 
 /** Brücke vom WebView-JavaScript nach Kotlin (JS-Thread → Main-Thread). */

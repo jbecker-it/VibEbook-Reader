@@ -208,9 +208,9 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Nur über WLAN synchronisieren", style = MaterialTheme.typography.bodyLarge)
+                    Text("Nur ungetaktete Netzwerke", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "Schont das mobile Datenvolumen beim Buch-Download.",
+                        "Zum Beispiel WLAN ohne Datenlimit. Gilt auch für den Fortschrittsabgleich.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
