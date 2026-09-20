@@ -96,7 +96,20 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun downloadBook(id: String) {
-        viewModelScope.launch { runCatching { bookRepository.downloadBook(id) } }
+        runLibraryAction { bookRepository.downloadBook(id) }
+    }
+
+    private val _actionError = MutableStateFlow<String?>(null)
+    val actionError = _actionError.asStateFlow()
+
+    fun removeMissingBook(id: String) = runLibraryAction { bookRepository.removeMissingBook(id) }
+
+    private fun runLibraryAction(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try { block(); _actionError.value = null }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { _actionError.value = e.message ?: "Aktion fehlgeschlagen" }
+        }
     }
 
     fun toggleFavorite(id: String) {

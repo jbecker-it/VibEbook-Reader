@@ -34,6 +34,6 @@ CI is necessary, not evidence that these physical-device checks passed.
 
 - One bound library per installation; changing its server/account/root requires a future explicit migration.
 - Full download of all discovered EPUBs; no selective-download policy yet.
-- Old extraction revisions are retained to avoid deleting files in use. Storage cleanup and explicit local-book removal need a follow-up design.
+- Old extraction revisions are retained to avoid deleting files in use. For books missing remotely, the explicit local-removal action removes all their local revisions after confirmation and retains progress. Automatic cleanup for updated books is not implemented.
 - No vendor-specific refresh controls; some branded key codes may require device-specific mapping.
 - Reader typography can be affected by publisher CSS. Hardware/device tests and actual Nextcloud validation remain mandatory before release.

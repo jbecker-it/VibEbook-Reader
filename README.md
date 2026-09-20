@@ -20,6 +20,7 @@ Nur HTTPS mit gültigem Zertifikat wird akzeptiert. Bei einer Weiterleitung muss
 - EPUB-Dateien werden rekursiv gefunden und vollständig lokal heruntergeladen.
 - ETags erkennen Änderungen; Downloads werden temporär geschrieben und erst nach erfolgreichem Abschluss übernommen.
 - Fehlende Remote-Bücher bleiben lokal erhalten und erhalten die Kennzeichnung „Nur lokal“.
+- „Lokale Kopie entfernen“ löscht deren lokale Buchdateien nur nach Bestätigung; der Lesefortschritt bleibt erhalten und Nextcloud wird nicht verändert.
 - Fehlerhafte oder unvollständige Verzeichnisantworten brechen den Scan ab. Kein automatisches Löschen lokaler Bücher.
 - Lesepositionen und Favoriten liegen als JSON-Dateien im Fortschrittsordner. Feldweise Zeitstempel entscheiden bei Konflikten, HTTP-Bedingungen verhindern unbemerkte konkurrierende Überschreibungen. Nach einem Konflikt erneut synchronisieren.
 - Positionen bestehen aus Kapitelindex, Zeichenoffset und einem Kapitelanteil als Fallback.

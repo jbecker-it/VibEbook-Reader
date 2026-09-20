@@ -121,6 +121,14 @@ class BookRepository @Inject constructor(
         downloadAndExtract(settings, id, entity.relativePath, entity.remoteEtag, entity.sizeBytes)
     }
 
+    suspend fun removeMissingBook(id: String) = libraryMutex.withLock {
+        val entity = bookDao.getById(id) ?: return@withLock
+        require(entity.missingRemotely) { "Nur nicht mehr auf Nextcloud vorhandene Bücher können entfernt werden." }
+        withContext(Dispatchers.IO) { de.folio.reader.data.local.LocalBookFiles.remove(booksDir, id) }
+        bookDao.delete(id)
+        // Deliberately keep filesDir/progress/<id>.json for a later reimport.
+    }
+
     /**
      * Favorit umschalten: sofort in der lokalen DB (UI), zusätzlich in der
      * Metadaten-Datei des Buches mit eigenem Zeitstempel – die Änderung wird

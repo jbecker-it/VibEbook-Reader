@@ -45,6 +45,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,6 +84,19 @@ fun LibraryScreen(
     val browse by viewModel.browseContent.collectAsStateWithLifecycle()
     val reading by viewModel.readingBooks.collectAsStateWithLifecycle()
     val favorites by viewModel.favoriteBooks.collectAsStateWithLifecycle()
+    val actionError by viewModel.actionError.collectAsStateWithLifecycle()
+    var removal by remember { mutableStateOf<Book?>(null) }
+    removal?.let { selected ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { removal = null },
+            title = { Text("Lokale Buchdateien löschen?") },
+            text = { Text("„${selected.title}“ ist nicht mehr auf Nextcloud vorhanden. Die lokale Kopie wird gelöscht. Der Lesefortschritt bleibt erhalten. Nextcloud wird nicht verändert.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { viewModel.removeMissingBook(selected.id); removal = null }) { Text("Lokal löschen") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { removal = null }) { Text("Behalten") } },
+        )
+    }
 
     // Zurück-Geste: erst Ordner hoch, dann normal.
     BackHandler(enabled = tab == LibraryTab.BROWSE && currentFolder.isNotEmpty()) {
@@ -120,6 +136,7 @@ fun LibraryScreen(
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
             if (syncStatus.running) SyncBanner(syncStatus)
             else syncStatus.message?.let { Text(it, modifier = Modifier.padding(16.dp)) }
+            actionError?.let { Text(it, modifier = Modifier.padding(16.dp)) }
             if (!isConfigured && books.isNotEmpty()) Text("Offline-Bibliothek · Nextcloud in den Einstellungen verbinden", modifier = Modifier.padding(16.dp))
 
             when {
@@ -167,6 +184,7 @@ fun LibraryScreen(
                                 else viewModel.downloadBook(book.id)
                             },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onRemove = { removal = it },
                         )
 
                         LibraryTab.READING -> BookGrid(
@@ -174,6 +192,7 @@ fun LibraryScreen(
                             emptyMessage = "Du liest gerade nichts. Such dir im Bibliothek-Tab etwas Schönes aus!",
                             onBookClick = { onBookSelected(it.id) },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onRemove = { removal = it },
                         )
 
                         LibraryTab.FAVORITES -> BookGrid(
@@ -184,6 +203,7 @@ fun LibraryScreen(
                                 else viewModel.downloadBook(book.id)
                             },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onRemove = { removal = it },
                         )
                     }
                 }
@@ -224,6 +244,7 @@ private fun BrowseGrid(
     onNavigateUp: () -> Unit,
     onBookClick: (Book) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onRemove: (Book) -> Unit,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 156.dp),
@@ -263,6 +284,7 @@ private fun BrowseGrid(
                 book = book,
                 onClick = { onBookClick(book) },
                 onToggleFavorite = { onToggleFavorite(book.id) },
+                onRemove = { onRemove(book) },
             )
         }
     }
@@ -274,6 +296,7 @@ private fun BookGrid(
     emptyMessage: String,
     onBookClick: (Book) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onRemove: (Book) -> Unit,
 ) {
     if (books.isEmpty()) {
         EmptyState(
@@ -297,6 +320,7 @@ private fun BookGrid(
                 book = book,
                 onClick = { onBookClick(book) },
                 onToggleFavorite = { onToggleFavorite(book.id) },
+                onRemove = { onRemove(book) },
             )
         }
     }
@@ -341,6 +365,7 @@ private fun BookCard(
     book: Book,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -453,7 +478,10 @@ private fun BookCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (book.missingRemotely) Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)
+        if (book.missingRemotely) {
+            Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)
+            androidx.compose.material3.OutlinedButton(onClick = onRemove) { Text("Lokale Kopie entfernen") }
+        }
     }
 }
 
