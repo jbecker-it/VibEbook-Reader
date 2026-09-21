@@ -10,6 +10,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      FOLIO_VERSION_CODE: ${{ github.run_number }}
     
     steps:
     - uses: actions/checkout@v4
@@ -37,11 +41,22 @@ jobs:
     - name: Test, lint, and build APK
       run: ./gradlew testDebugUnitTest lintDebug assembleDebug
     
-    - name: Upload APK
+    - name: Test signing guards and repeatability
+      run: python3 scripts/test-signing.py
+
+    - name: Sign distributable APK with permanent key
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+      env:
+        FOLIO_SIGNING_BUNDLE: ${{ secrets.FOLIO_SIGNING_BUNDLE }}
+      run: python3 scripts/sign-apk.py --input app/build/outputs/apk/debug/app-debug.apk --output app/build/outputs/distribution/folio.apk
+
+    - name: Upload consistently signed APK
+      if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
       uses: actions/upload-artifact@v4
       with:
-        name: app-debug
-        path: app/build/outputs/apk/debug/app-debug.apk
+        name: folio-apk
+        path: app/build/outputs/distribution/
+        if-no-files-found: error
         retention-days: 30
 
     - name: Print lint errors

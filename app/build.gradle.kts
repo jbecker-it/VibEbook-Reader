@@ -14,8 +14,11 @@ android {
         applicationId = "de.folio.reader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Keep this workflow's run counter for every distributed APK; reruns retain the same version.
+        versionCode = providers.environmentVariable("FOLIO_VERSION_CODE").orNull?.toInt()?.also {
+            require(it in 1..2100000000) { "Invalid FOLIO_VERSION_CODE" }
+        } ?: 1
+        versionName = "1.0.$versionCode"
         vectorDrawables { useSupportLibrary = true }
     }
 
