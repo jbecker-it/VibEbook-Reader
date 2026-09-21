@@ -180,6 +180,7 @@ fun ReaderScreen(
 
             else -> EpubWebView(
                 filePath = book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)],
+                fixedLayout = state.layouts[book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)]],
                 restoreFraction = state.restoreScrollFraction,
                 restoreCharOffset = state.restoreCharOffset,
                 twoPage = twoPage,
@@ -336,6 +337,7 @@ private fun BottomOverlay(
 @Composable
 private fun EpubWebView(
     filePath: String,
+    fixedLayout: Boolean?,
     restoreFraction: Float,
     restoreCharOffset: Int,
     twoPage: Boolean,
@@ -370,6 +372,7 @@ private fun EpubWebView(
         restoreFraction, restoreCharOffset, twoPage, smoothTurns,
         backgroundHex, textHex, linkHex, forceColors,
         preferences,
+        fixedLayout,
     )
 
     // Layout-/Themewechsel ohne Neuladen anwenden: erneut injizieren – das
@@ -480,7 +483,7 @@ private class ReaderBridge(private val handler: Handler) {
  * sind die Offsets geräteunabhängig – unabhängig von Displaygröße und Layout.
  * Fallback bleibt der Kapitel-Anteil 0..1 (alte Fortschrittsdateien).
  */
-private fun buildInjection(
+internal fun buildInjection(
     restoreFraction: Float,
     restoreCharOffset: Int,
     twoPage: Boolean,
@@ -490,6 +493,7 @@ private fun buildInjection(
     linkHex: String,
     forceColors: Boolean,
     preferences: ReaderPreferences,
+    fixedLayout: Boolean? = null,
 ): String {
     val frac = restoreFraction.coerceIn(0f, 1f).toString()
     val colorRules = if (forceColors) {
@@ -513,6 +517,7 @@ private fun buildInjection(
         F.zone = ${if (preferences.wideTapZones) "0.4" else "0.3"};
         F.colorRules = ${jsString(colorRules)};
         F.colorScheme = "$colorScheme";
+        F.declaredFixed = ${fixedLayout?.toString() ?: "null"};
         if (firstRun) {
             F.fraction = $frac;          // Kapitel-Anteil 0..1 (Fallback)
             F.anchor = $restoreCharOffset; // Zeichen-Offset, -1 = keiner
@@ -522,8 +527,15 @@ private fun buildInjection(
             F.PH = 24;
         }
 
-        if (firstRun && !document.querySelector('meta[name=viewport]')) {
-            var m = document.createElement('meta');
+        if (firstRun) {
+            var m = document.querySelector('meta[name=viewport]');
+            var viewport = m ? m.content : '';
+            var width = viewport.match(/(?:^|[,;\s])width\s*=\s*([\d.]+)/i);
+            var height = viewport.match(/(?:^|[,;\s])height\s*=\s*([\d.]+)/i);
+            F.pageWidth = width ? Number(width[1]) : 0;
+            F.pageHeight = height ? Number(height[1]) : 0;
+            F.fixed = F.declaredFixed === true || (F.declaredFixed !== false && F.pageWidth > 0 && F.pageHeight > 0);
+            if (!m) m = document.createElement('meta');
             m.name = 'viewport';
             m.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
             document.head.appendChild(m);
@@ -616,6 +628,36 @@ private fun buildInjection(
                 F.colorRules;
         };
 
+        // A fixed page is one canvas: preserve publisher CSS and scale every layer together.
+        F.layoutFixed = function(W, H) {
+            var body = document.body;
+            if (!(F.pageWidth > 0 && F.pageHeight > 0)) {
+                var svg = body.querySelector('svg[viewBox]');
+                var box = svg && svg.viewBox.baseVal;
+                var css = getComputedStyle(body);
+                F.pageWidth = box && box.width > 0 ? box.width : parseFloat(css.width);
+                F.pageHeight = box && box.height > 0 ? box.height : parseFloat(css.height);
+                if (!(F.pageWidth > 0 && F.pageHeight > 0)) return;
+            }
+            var scale = Math.min(W / F.pageWidth, H / F.pageHeight);
+            var x = (W - F.pageWidth * scale) / 2;
+            var y = (H - F.pageHeight * scale) / 2;
+            var style = document.getElementById('folio-style');
+            if (!style) {
+                style = document.createElement('style'); style.id = 'folio-style';
+                document.head.appendChild(style);
+            }
+            style.textContent = 'html{margin:0!important;padding:0!important;overflow:hidden!important;background:#fff!important;}' +
+                'body{position:absolute!important;left:0!important;top:0!important;margin:0!important;' +
+                'width:' + F.pageWidth + 'px!important;height:' + F.pageHeight + 'px!important;' +
+                'transform-origin:0 0!important;transform:translate(' + x + 'px,' + y + 'px) scale(' + scale + ')!important;' +
+                'overflow:hidden!important;touch-action:none;-webkit-text-size-adjust:100%;}' +
+                '::-webkit-scrollbar{display:none;}';
+            F.screen = 0; F.screens = 1; F.step = W; F.anchor = -1;
+            window.scrollTo(0, 0);
+            if (window.AndroidReader) AndroidReader.onPosition(F.fraction, -1);
+        };
+
         F.layout = function() {
             var W = window.innerWidth, H = window.innerHeight;
             // Während eines Display-Wechsels (Foldable auf-/zuklappen) kann das
@@ -626,6 +668,7 @@ private fun buildInjection(
                 F.retryTimer = setTimeout(F.layout, 120);
                 return;
             }
+            if (F.fixed) { F.layoutFixed(W, H); return; }
             var GAP = 48, PH = ${preferences.margin}, PV = 28;
             document.body.style.setProperty('font-size', '${preferences.fontSize}px', 'important');
             document.body.style.setProperty('font-family', '${if (preferences.sansSerif) "sans-serif" else "serif"}', 'important');

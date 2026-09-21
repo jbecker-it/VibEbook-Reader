@@ -184,6 +184,7 @@ fun LibraryScreen(
                                 else viewModel.downloadBook(book.id)
                             },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onSetFinished = viewModel::setFinished,
                             onRemove = { removal = it },
                         )
 
@@ -192,6 +193,7 @@ fun LibraryScreen(
                             emptyMessage = "Du liest gerade nichts. Such dir im Bibliothek-Tab etwas Schönes aus!",
                             onBookClick = { onBookSelected(it.id) },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onSetFinished = viewModel::setFinished,
                             onRemove = { removal = it },
                         )
 
@@ -203,6 +205,7 @@ fun LibraryScreen(
                                 else viewModel.downloadBook(book.id)
                             },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onSetFinished = viewModel::setFinished,
                             onRemove = { removal = it },
                         )
                     }
@@ -244,6 +247,7 @@ private fun BrowseGrid(
     onNavigateUp: () -> Unit,
     onBookClick: (Book) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onSetFinished: (String, Boolean) -> Unit,
     onRemove: (Book) -> Unit,
 ) {
     LazyVerticalGrid(
@@ -284,6 +288,7 @@ private fun BrowseGrid(
                 book = book,
                 onClick = { onBookClick(book) },
                 onToggleFavorite = { onToggleFavorite(book.id) },
+                onToggleFinished = { onSetFinished(book.id, !book.isFinished) },
                 onRemove = { onRemove(book) },
             )
         }
@@ -296,6 +301,7 @@ private fun BookGrid(
     emptyMessage: String,
     onBookClick: (Book) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onSetFinished: (String, Boolean) -> Unit,
     onRemove: (Book) -> Unit,
 ) {
     if (books.isEmpty()) {
@@ -320,6 +326,7 @@ private fun BookGrid(
                 book = book,
                 onClick = { onBookClick(book) },
                 onToggleFavorite = { onToggleFavorite(book.id) },
+                onToggleFinished = { onSetFinished(book.id, !book.isFinished) },
                 onRemove = { onRemove(book) },
             )
         }
@@ -365,6 +372,7 @@ private fun BookCard(
     book: Book,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onToggleFinished: () -> Unit,
     onRemove: () -> Unit,
 ) {
     Column(
@@ -477,6 +485,9 @@ private fun BookCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        androidx.compose.material3.OutlinedButton(onClick = onToggleFinished, modifier = Modifier.fillMaxWidth()) {
+            Text(if (book.isFinished) "Als ungelesen markieren" else "Als gelesen markieren")
         }
         if (book.missingRemotely) {
             Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)

@@ -21,6 +21,16 @@ jobs:
         distribution: 'temurin'
         cache: gradle
     
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Test comic and novel layout
+      run: |
+        npm install --no-save --ignore-scripts playwright@1.56.1
+        npx playwright install --with-deps chromium
+        node scripts/test-reader-layout.cjs
+
     - name: Make gradlew executable
       run: chmod +x ./gradlew
     

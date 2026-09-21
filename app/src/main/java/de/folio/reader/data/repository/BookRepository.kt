@@ -155,6 +155,32 @@ class BookRepository @Inject constructor(
         progressRepo.write(meta)
     }
 
+    /** Read existing extracted metadata too, so upgrades need no new download. */
+    suspend fun readLayouts(book: Book): Map<String, Boolean> = withContext(Dispatchers.IO) {
+        val path = book.spine.firstOrNull() ?: return@withContext emptyMap()
+        val root = booksDir.canonicalFile
+        var dir = File(path).canonicalFile.parentFile
+        while (dir != null && dir.parentFile != root) {
+            if (!dir.path.startsWith(root.path + File.separator)) return@withContext emptyMap()
+            dir = dir.parentFile
+        }
+        val bookDir = dir ?: return@withContext emptyMap()
+        runCatching { epubParser.readLayouts(bookDir) }.getOrDefault(emptyMap())
+    }
+
+    /** Changes completion without moving the bookmark or changing reading recency. */
+    suspend fun setFinished(id: String, finished: Boolean) {
+        if (bookDao.getById(id) == null) return
+        val base = progressRepo.read(id) ?: ReadingProgress(
+            bookId = id, spineIndex = 0, scrollFraction = 0f,
+            updatedAt = 0L, deviceId = settingsRepo.deviceId(),
+        )
+        progressRepo.write(base.copy(
+            finished = finished,
+            finishedUpdatedAt = maxOf(System.currentTimeMillis(), base.finishedUpdatedAt + 1),
+        ))
+    }
+
     private suspend fun downloadAndExtract(
         settings: NextcloudSettings,
         id: String,

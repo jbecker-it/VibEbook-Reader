@@ -33,7 +33,8 @@ val Book.readFraction: Float
 
 /** Fertig gelesen (Flag aus dem Fortschritt oder praktisch am Ende). */
 val Book.isFinished: Boolean
-    get() = progress?.finished == true || readFraction >= 0.98f
+    get() = if ((progress?.finishedUpdatedAt ?: 0L) > 0L) progress?.finished == true
+        else progress?.finished == true || readFraction >= 0.98f
 
 /** Bereits angefangen (für den Tab „Lese ich"). */
 val Book.isStarted: Boolean

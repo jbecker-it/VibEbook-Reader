@@ -37,3 +37,11 @@ CI is necessary, not evidence that these physical-device checks passed.
 - Old extraction revisions are retained to avoid deleting files in use. For books missing remotely, the explicit local-removal action removes all their local revisions after confirmation and retains progress. Automatic cleanup for updated books is not implemented.
 - No vendor-specific refresh controls; some branded key codes may require device-specific mapping.
 - Reader typography can be affected by publisher CSS. Hardware/device tests and actual Nextcloud validation remain mandatory before release.
+# Read/unread and fixed-layout comics
+
+- Each library card has “Als gelesen markieren” / “Als ungelesen markieren”. Verify the checkmark and Reading tab update immediately, including offline; the saved reading position must not move.
+- Sync two devices: change status on one, continue reading or favorite on the other, then sync both. Status, bookmark and favorite must merge independently. Explicit unread must remain unread even with a bookmark at 100%.
+- Open an EPUB with `rendition:layout=pre-paginated` or numeric viewport width/height. Artwork and positioned text should scale together, centered with the whole page visible on phone and BOOX Go 6, including landscape and sleep/wake.
+- Fixed pages deliberately preserve publisher fonts/colors and use one page at a time. Novel font settings and two-column layout apply only to reflowable content.
+- Verify last-page forward taps keep the last page visible; backward taps on the first page keep the first page visible.
+- CI runs the production injected JavaScript in Chromium with synthetic layered comic and novel fixtures; JVM tests cover OPF layout overrides and status conflict resolution. The reported comic still needs verification with its actual EPUB on Android WebView.

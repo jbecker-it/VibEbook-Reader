@@ -104,6 +104,8 @@ class LibraryViewModel @Inject constructor(
 
     fun removeMissingBook(id: String) = runLibraryAction { bookRepository.removeMissingBook(id) }
 
+    fun setFinished(id: String, finished: Boolean) = runLibraryAction { bookRepository.setFinished(id, finished) }
+
     private fun runLibraryAction(block: suspend () -> Unit) {
         viewModelScope.launch {
             try { block(); _actionError.value = null }

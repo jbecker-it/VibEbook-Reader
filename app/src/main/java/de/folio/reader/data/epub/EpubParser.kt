@@ -112,6 +112,12 @@ class EpubParser {
         )
     }
 
+    fun readLayouts(bookDir: File): Map<String, Boolean> {
+        val opf = locateOpf(bookDir)
+        return opf.inputStream().use { EpubLayout.read(it) }
+            .mapKeys { (href, _) -> resolve(opf.parentFile ?: bookDir, href) }
+    }
+
     private fun locateOpf(bookDir: File): File {
         val container = File(bookDir, "META-INF/container.xml")
         if (container.exists()) {

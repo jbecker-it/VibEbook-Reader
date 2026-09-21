@@ -34,6 +34,7 @@ data class ReaderUiState(
     val chapterFraction: Float = 0f,
     val favorite: Boolean = false,
     val loading: Boolean = true,
+    val layouts: Map<String, Boolean> = emptyMap(),
 )
 
 @HiltViewModel
@@ -88,6 +89,7 @@ class ReaderViewModel @Inject constructor(
                 chapterFraction = restore,
                 favorite = book?.favorite ?: false,
                 loading = false,
+                layouts = book?.let { bookRepository.readLayouts(it) } ?: emptyMap(),
             )
             lastScrollFraction = restore
             lastCharOffset = anchor
@@ -118,10 +120,15 @@ class ReaderViewModel @Inject constructor(
         scheduleSave()
     }
 
-    fun nextChapter() = goToChapter(_state.value.spineIndex + 1, restoreFraction = 0f)
+    fun nextChapter() {
+        val s = _state.value
+        if (s.spineIndex < (s.book?.spine?.lastIndex ?: 0)) goToChapter(s.spineIndex + 1, 0f)
+    }
 
     /** Rückwärts über die Kapitelgrenze: ans Ende des vorherigen Kapitels springen. */
-    fun previousChapter() = goToChapter(_state.value.spineIndex - 1, restoreFraction = 1f)
+    fun previousChapter() {
+        if (_state.value.spineIndex > 0) goToChapter(_state.value.spineIndex - 1, 1f)
+    }
 
     /**
      * Vom WebView gemeldete Position: Anteil im Kapitel plus wortgenauer
