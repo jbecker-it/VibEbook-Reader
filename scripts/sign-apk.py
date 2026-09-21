@@ -50,10 +50,13 @@ def sign(apk, output, expected_file):
         run([apksigner, "sign", "--ks", str(store), "--ks-key-alias", alias,
              "--ks-pass", "env:FOLIO_KEY_PASSWORD", "--key-pass", "env:FOLIO_KEY_PASSWORD",
              "--v4-signing-enabled", "false", "--out", str(signed), str(apk)], env)
-        report = run([apksigner, "verify", "--print-certs", str(signed)], env).decode()
-        fingerprints = re.findall(r"Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)", report)
-        if [f.lower() for f in fingerprints] != [expected]:
-            raise RuntimeError("Final APK signing certificate verification failed")
+        report = run([apksigner, "verify", "--print-certs-pem", str(signed)], env).decode()
+        # Human-readable signer labels vary between build-tools versions; PEM is stable.
+        certificates = re.findall(r"-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----", report, re.S)
+        fingerprints = [hashlib.sha256(base64.b64decode(re.sub(r"\s+", "", cert), validate=True)).hexdigest()
+                        for cert in certificates]
+        if fingerprints != [expected]:
+            raise RuntimeError(f"Final APK signing certificate verification failed (public fingerprints: {fingerprints})")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(signed.read_bytes())
         output.with_suffix('.signing.txt').write_text(
