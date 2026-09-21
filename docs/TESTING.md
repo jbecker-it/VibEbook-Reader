@@ -37,7 +37,8 @@ CI is necessary, not evidence that these physical-device checks passed.
 - Old extraction revisions are retained to avoid deleting files in use. For books missing remotely, the explicit local-removal action removes all their local revisions after confirmation and retains progress. Automatic cleanup for updated books is not implemented.
 - No vendor-specific refresh controls; some branded key codes may require device-specific mapping.
 - Reader typography can be affected by publisher CSS. Hardware/device tests and actual Nextcloud validation remain mandatory before release.
-# Read/unread and fixed-layout comics
+
+## Read/unread and fixed-layout comics
 
 - Each library card has “Als gelesen markieren” / “Als ungelesen markieren”. Verify the checkmark and Reading tab update immediately, including offline; the saved reading position must not move.
 - Sync two devices: change status on one, continue reading or favorite on the other, then sync both. Status, bookmark and favorite must merge independently. Explicit unread must remain unread even with a bookmark at 100%.
@@ -45,3 +46,11 @@ CI is necessary, not evidence that these physical-device checks passed.
 - Fixed pages deliberately preserve publisher fonts/colors and use one page at a time. Novel font settings and two-column layout apply only to reflowable content.
 - Verify last-page forward taps keep the last page visible; backward taps on the first page keep the first page visible.
 - CI runs the production injected JavaScript in Chromium with synthetic layered comic and novel fixtures; JVM tests cover OPF layout overrides and status conflict resolution. The reported comic still needs verification with its actual EPUB on Android WebView.
+
+## Follow-up: legacy comics and queued sync
+
+- Test a converted comic without OPF/viewport layout hints, with a CSS-sized page and positioned text. CI covers this structure plus an ordinary inline illustration that must remain reflowable.
+- In the reader menu, open Aa → Darstellung für dieses Buch → Originalseite / Comic. Switch between this, Automatisch and Fließtext; verify the document reloads with its original styles and retains its bookmark. Reopen the book to verify the choice persists; another book must keep its own setting. This override is local to the device.
+- Enqueue sync offline, then reconnect. Queued work must show a static explanation, not a running spinner; the sync button must remain available.
+- With a metered connection (including VPNs Android classifies as metered), enable “Nur ungetaktete Netzwerke”, queue sync, then disable the setting. The pending request and periodic constraints must update without clearing app data; active downloads must not be interrupted. The restriction is never bypassed automatically.
+- Simulate a transient server failure: retry/backoff must not be labeled “waiting for network”. Manual retry should replace queued work using the current settings.

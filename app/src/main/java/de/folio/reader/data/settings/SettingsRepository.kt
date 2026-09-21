@@ -69,6 +69,15 @@ class SettingsRepository @Inject constructor(
             .getOrDefault(PageLayoutMode.AUTO)
     }
 
+    fun bookLayout(bookId: String): Flow<de.folio.reader.domain.model.BookLayoutMode> = context.dataStore.data.map { p ->
+        runCatching { de.folio.reader.domain.model.BookLayoutMode.valueOf(p[stringPreferencesKey("book_layout_$bookId")] ?: "AUTO") }
+            .getOrDefault(de.folio.reader.domain.model.BookLayoutMode.AUTO)
+    }
+
+    suspend fun setBookLayout(bookId: String, mode: de.folio.reader.domain.model.BookLayoutMode) {
+        context.dataStore.edit { it[stringPreferencesKey("book_layout_$bookId")] = mode.name }
+    }
+
     val wifiOnly: Flow<Boolean> = context.dataStore.data.map { it[Keys.WIFI_ONLY] ?: true }
 
     /** E-Ink-Modus: Blättern und Menü ohne Animationen. */

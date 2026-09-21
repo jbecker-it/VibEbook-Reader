@@ -74,6 +74,28 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
         await load(comic.replace('width=1200,height=1800','width=device-width'),true);
         assert.equal(await page.evaluate(() => __folio.fixed),true);
         assert.equal(await page.evaluate(() => __folio.pageHeight),1800);
+        // Legacy converted comics: no OPF hint or numeric viewport; a CSS-sized canvas with text overlays.
+        const legacy = comic.replace('width=1200,height=1800','width=device-width')
+            .replace('body{margin:0;width:1200px;height:1800px;background:white;font:40px sans-serif}',
+                'body{margin:0} #page{position:relative;width:1200px;height:1800px;background:white;font:40px sans-serif}')
+            .replace('<body>','<body><div id="page">').replace('</body>','</div></body>');
+        for (const mode of [null,true]) {
+            await page.setViewportSize({width:360,height:800});
+            await load(legacy,mode);
+            assert.equal(await page.evaluate(() => __folio.fixed),true);
+            assert.equal(await page.evaluate(() => __folio.pageWidth),1200);
+            assert.equal(await page.evaluate(() => __folio.pageHeight),1800);
+            const g = await page.evaluate(() => {
+                const a=document.querySelector('#art').getBoundingClientRect();
+                const c=document.querySelector('#caption').getBoundingClientRect();
+                return {w:a.width,h:a.height,dx:c.x-a.x,dy:c.y-a.y};
+            });
+            assert.ok(Math.abs(g.w-360)<1 && Math.abs(g.h-540)<1);
+            assert.ok(Math.abs(g.dx-72)<1 && Math.abs(g.dy-108)<1);
+        }
+        // An ordinary inline image with prose must not trigger fixed-page detection.
+        await load('<html><body><svg width="300" height="400"></svg><p>Ordinary prose</p></body></html>',null);
+        assert.equal(await page.evaluate(() => __folio.fixed),false);
         await load('<html><head><meta name="viewport" content="width=1200,height=1800"></head><body>' +
             '<p>This is an original paragraph for pagination regression testing.</p>'.repeat(150) + '</body></html>',false);
         assert.equal(await page.evaluate(() => __folio.fixed),false);

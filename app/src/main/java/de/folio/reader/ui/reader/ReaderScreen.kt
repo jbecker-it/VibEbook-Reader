@@ -112,9 +112,15 @@ fun ReaderScreen(
     if (typographyVisible) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { typographyVisible = false },
-            title = { Text("Schrift und Layout") },
+            title = { Text("Schrift und Darstellung") },
             text = {
                 Column {
+                    Text("Darstellung für dieses Buch")
+                    de.folio.reader.domain.model.BookLayoutMode.entries.forEach { mode ->
+                        androidx.compose.material3.TextButton(onClick = { viewModel.setLayoutMode(mode) }) {
+                            Text((if (state.layoutMode == mode) "✓ " else "") + mode.label)
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         androidx.compose.material3.TextButton(onClick = { viewModel.setReaderPreferences(readerPreferences.copy(fontSize = readerPreferences.fontSize - 2)) }) { Text("A−") }
                         Text("${readerPreferences.fontSize}")
@@ -178,9 +184,13 @@ fun ReaderScreen(
                 color = colorScheme.onSurfaceVariant,
             )
 
-            else -> EpubWebView(
+            else -> androidx.compose.runtime.key(book.id, state.layoutMode) { EpubWebView(
                 filePath = book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)],
-                fixedLayout = state.layouts[book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)]],
+                fixedLayout = when (state.layoutMode) {
+                    de.folio.reader.domain.model.BookLayoutMode.ORIGINAL -> true
+                    de.folio.reader.domain.model.BookLayoutMode.REFLOWABLE -> false
+                    else -> state.layouts[book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)]]
+                },
                 restoreFraction = state.restoreScrollFraction,
                 restoreCharOffset = state.restoreCharOffset,
                 twoPage = twoPage,
@@ -195,7 +205,7 @@ fun ReaderScreen(
                 onToggleMenu = { menuVisible = !menuVisible },
                 onNextChapter = viewModel::nextChapter,
                 onPrevChapter = viewModel::previousChapter,
-            )
+            ) }
         }
 
         AnimatedVisibility(
@@ -534,7 +544,28 @@ internal fun buildInjection(
             var height = viewport.match(/(?:^|[,;\s])height\s*=\s*([\d.]+)/i);
             F.pageWidth = width ? Number(width[1]) : 0;
             F.pageHeight = height ? Number(height[1]) : 0;
-            F.fixed = F.declaredFixed === true || (F.declaredFixed !== false && F.pageWidth > 0 && F.pageHeight > 0);
+            // Older PDF-to-EPUB exports often omit rendition/viewport metadata.
+            // Require a sized canvas containing artwork AND positioned text, not just an illustration.
+            var canvas = null;
+            var candidates = Array.from(document.querySelectorAll('div,section')).concat([document.body]);
+            for (var candidate of candidates) {
+                if (!candidate || !candidate.querySelector('img,svg')) continue;
+                var cs = getComputedStyle(candidate);
+                var positionedText = Array.from(candidate.querySelectorAll('p,span,div')).some(function(node) {
+                    return node.textContent.trim() && getComputedStyle(node).position === 'absolute';
+                });
+                var cw = Math.max(parseFloat(cs.width), candidate.scrollWidth);
+                var ch = Math.max(parseFloat(cs.height), candidate.scrollHeight);
+                if (positionedText && cw > 200 && ch > 200 && cs.width.endsWith('px') && cs.height.endsWith('px')) {
+                    canvas = {width:cw,height:ch};
+                    break;
+                }
+            }
+            F.fixed = F.declaredFixed === true || (F.declaredFixed !== false &&
+                ((F.pageWidth > 0 && F.pageHeight > 0) || canvas !== null));
+            if (F.fixed && !(F.pageWidth > 0 && F.pageHeight > 0) && canvas) {
+                F.pageWidth = canvas.width; F.pageHeight = canvas.height;
+            }
             if (!m) m = document.createElement('meta');
             m.name = 'viewport';
             m.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
@@ -635,8 +666,12 @@ internal fun buildInjection(
                 var svg = body.querySelector('svg[viewBox]');
                 var box = svg && svg.viewBox.baseVal;
                 var css = getComputedStyle(body);
+                var img = body.querySelector('img');
                 F.pageWidth = box && box.width > 0 ? box.width : parseFloat(css.width);
                 F.pageHeight = box && box.height > 0 ? box.height : parseFloat(css.height);
+                if (!(F.pageHeight > 0) && img && img.naturalWidth > 0) {
+                    F.pageWidth = img.naturalWidth; F.pageHeight = img.naturalHeight;
+                }
                 if (!(F.pageWidth > 0 && F.pageHeight > 0)) return;
             }
             var scale = Math.min(W / F.pageWidth, H / F.pageHeight);

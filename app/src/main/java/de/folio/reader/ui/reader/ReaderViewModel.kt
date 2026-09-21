@@ -35,6 +35,7 @@ data class ReaderUiState(
     val favorite: Boolean = false,
     val loading: Boolean = true,
     val layouts: Map<String, Boolean> = emptyMap(),
+    val layoutMode: de.folio.reader.domain.model.BookLayoutMode = de.folio.reader.domain.model.BookLayoutMode.AUTO,
 )
 
 @HiltViewModel
@@ -90,6 +91,7 @@ class ReaderViewModel @Inject constructor(
                 favorite = book?.favorite ?: false,
                 loading = false,
                 layouts = book?.let { bookRepository.readLayouts(it) } ?: emptyMap(),
+                layoutMode = settingsRepository.bookLayout(bookId).first(),
             )
             lastScrollFraction = restore
             lastCharOffset = anchor
@@ -147,6 +149,12 @@ class ReaderViewModel @Inject constructor(
             )
         }
         scheduleSave()
+    }
+
+    fun setLayoutMode(mode: de.folio.reader.domain.model.BookLayoutMode) {
+        val id = loadedId ?: return
+        _state.update { it.copy(layoutMode = mode) }
+        viewModelScope.launch { settingsRepository.setBookLayout(id, mode) }
     }
 
     fun toggleFavorite() {
