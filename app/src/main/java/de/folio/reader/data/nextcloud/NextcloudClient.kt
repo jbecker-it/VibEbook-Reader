@@ -26,7 +26,7 @@ import kotlin.coroutines.resumeWithException
 
 data class RemoteEntry(val relativePath: String, val directory: Boolean, val size: Long, val etag: String)
 data class RemoteText(val content: String, val etag: String?)
-class DavException(val status: Int) : IOException(when (status) {
+class DavException(val status: Int, operation: String = "WebDAV") : IOException("$operation (HTTP $status): " + when (status) {
     401 -> "Anmeldung fehlgeschlagen. Benutzername und App-Passwort prüfen."
     403 -> "Keine Berechtigung für diesen Nextcloud-Ordner."
     404 -> "Nextcloud-Ordner oder Datei nicht gefunden."
@@ -67,7 +67,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
 
     private suspend fun list(settings: NextcloudSettings, path: String): List<RemoteEntry> = withContext(Dispatchers.IO) {
         execute(settings, path, "PROPFIND", PROPERTIES, mapOf("Depth" to "1")).use { response ->
-            if (response.code != 207) throw DavException(response.code)
+            if (response.code != 207) throw DavException(response.code, "Ordner lesen / PROPFIND")
             val xml = response.body?.byteStream()?.use { readLimited(it, MAX_XML) } ?: throw IOException("Leere Ordnerantwort.")
             parseListing(xml, settings.davUrl(), settings.davUrl(path))
         }
@@ -95,7 +95,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
         val temporary = File.createTempFile("download-", ".part", target.parentFile)
         try {
             execute(settings, path, "GET", headers = if (etag.isBlank()) emptyMap() else mapOf("If-Match" to etag)).use { response ->
-                if (response.code != 200) throw DavException(response.code)
+                if (response.code != 200) throw DavException(response.code, "Buch laden / GET")
                 val body = response.body ?: throw IOException("Leere Buchantwort.")
                 body.byteStream().use { input -> temporary.outputStream().use { output ->
                     val buffer = ByteArray(65536)
@@ -115,7 +115,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
     suspend fun readTextOrNull(settings: NextcloudSettings, path: String): RemoteText? = withContext(Dispatchers.IO) {
         execute(settings, path, "GET").use { response ->
             if (response.code == 404) return@withContext null
-            if (response.code != 200) throw DavException(response.code)
+            if (response.code != 200) throw DavException(response.code, "Fortschritt lesen / GET")
             val content = response.body?.byteStream()?.use { input ->
                 readLimited(input, 65536)
             } ?: throw IOException("Leere Fortschrittsdatei.")
@@ -128,14 +128,14 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
         for (segment in NextcloudSettings.segments(path).dropLast(1)) {
             parent = listOf(parent, segment).filter { it.isNotEmpty() }.joinToString("/")
             execute(settings, parent, "MKCOL", "").use { response ->
-                if (response.code != 201 && response.code != 405) throw DavException(response.code)
+                if (response.code != 201 && response.code != 405) throw DavException(response.code, "Fortschrittsordner anlegen / MKCOL")
             }
         }
         // Never blindly overwrite progress read without a concurrency token.
         if (previous != null && previous.etag == null) throw IOException("Nextcloud liefert keinen ETag für den Fortschritt.")
         val condition = if (previous == null) mapOf("If-None-Match" to "*") else mapOf("If-Match" to previous.etag!!)
         execute(settings, path, "PUT", text, condition).use { response ->
-            if (response.code !in listOf(200, 201, 204)) throw DavException(response.code)
+            if (response.code !in listOf(200, 201, 204)) throw DavException(response.code, "Fortschritt speichern / PUT")
         }
     }
 

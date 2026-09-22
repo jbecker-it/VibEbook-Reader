@@ -93,6 +93,33 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
             assert.ok(Math.abs(g.w-360)<1 && Math.abs(g.h-540)<1);
             assert.ok(Math.abs(g.dx-72)<1 && Math.abs(g.dy-108)<1);
         }
+        // Synthetic reproduction of the supplied EPUB: 5x artwork and positioned text,
+        // reduced by an author body transform. Do not clip the canvas before scaling.
+        const scaledComic = `<!doctype html><html><head>
+            <meta name="viewport" content="width=709,height=1066">
+            <style>body{margin:0;width:709px;height:1066px;transform:rotate(0deg) scale(.2);transform-origin:0% 0%}
+            #art{width:500%;height:500%} #caption{position:absolute;left:2000px;top:4500px;font:75px sans-serif}</style>
+            </head><body><svg id="art" viewBox="0 0 3545 5330"><rect width="3545" height="5330" fill="silver"/></svg>
+            <div id="caption">Original test caption</div></body></html>`;
+        for (const mode of [null,true]) {
+            await load(scaledComic,mode);
+            for (const [width,height] of [[360,800],[1072,1448],[800,360]]) {
+                await page.setViewportSize({width,height});
+                await page.evaluate(injection(mode));
+                await page.evaluate(() => __folio.layout());
+                const g = await page.evaluate(() => {
+                    const a=document.querySelector('#art').getBoundingClientRect();
+                    const c=document.querySelector('#caption').getBoundingClientRect();
+                    return {x:a.x,y:a.y,w:a.width,h:a.height,dx:c.x-a.x,dy:c.y-a.y,
+                        overflow:getComputedStyle(document.body).overflow};
+                });
+                const scale=Math.min(width/709,height/1066);
+                assert.ok(Math.abs(g.w-709*scale)<1 && Math.abs(g.h-1066*scale)<1,JSON.stringify(g));
+                assert.ok(Math.abs(g.dx-400*scale)<1 && Math.abs(g.dy-900*scale)<1);
+                assert.ok(g.x>=-1 && g.y>=-1 && g.x+g.w<=width+1 && g.y+g.h<=height+1);
+                assert.equal(g.overflow,'visible');
+            }
+        }
         // An ordinary inline image with prose must not trigger fixed-page detection.
         await load('<html><body><svg width="300" height="400"></svg><p>Ordinary prose</p></body></html>',null);
         assert.equal(await page.evaluate(() => __folio.fixed),false);

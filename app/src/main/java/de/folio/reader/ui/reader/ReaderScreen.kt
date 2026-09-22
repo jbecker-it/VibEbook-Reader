@@ -538,6 +538,13 @@ internal fun buildInjection(
         }
 
         if (firstRun) {
+            // Publisher transforms can shrink a large artwork/text canvas together.
+            // Capture once, before our stylesheet; never compound our own screen transform.
+            var authored = getComputedStyle(document.body);
+            var origin = authored.transformOrigin.split(' ');
+            F.authorTransform = authored.transform === 'none' ? '' :
+                ' translate(' + origin[0] + ',' + origin[1] + ') ' + authored.transform +
+                ' translate(' + (-parseFloat(origin[0])) + 'px,' + (-parseFloat(origin[1])) + 'px)';
             var m = document.querySelector('meta[name=viewport]');
             var viewport = m ? m.content : '';
             var width = viewport.match(/(?:^|[,;\s])width\s*=\s*([\d.]+)/i);
@@ -685,8 +692,8 @@ internal fun buildInjection(
             style.textContent = 'html{margin:0!important;padding:0!important;overflow:hidden!important;background:#fff!important;}' +
                 'body{position:absolute!important;left:0!important;top:0!important;margin:0!important;' +
                 'width:' + F.pageWidth + 'px!important;height:' + F.pageHeight + 'px!important;' +
-                'transform-origin:0 0!important;transform:translate(' + x + 'px,' + y + 'px) scale(' + scale + ')!important;' +
-                'overflow:hidden!important;touch-action:none;-webkit-text-size-adjust:100%;}' +
+                'transform-origin:0 0!important;transform:translate(' + x + 'px,' + y + 'px) scale(' + scale + ')' + F.authorTransform + '!important;' +
+                'overflow:visible!important;touch-action:none;-webkit-text-size-adjust:100%;}' +
                 '::-webkit-scrollbar{display:none;}';
             F.screen = 0; F.screens = 1; F.step = W; F.anchor = -1;
             window.scrollTo(0, 0);

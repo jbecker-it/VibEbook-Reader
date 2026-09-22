@@ -45,7 +45,11 @@ class NextcloudHttpTest {
         assertNull(client.readTextOrNull(settings, "progress.json"))
         server.enqueue(MockResponse().setResponseCode(403))
         try { client.readTextOrNull(settings, "progress.json"); fail("403 must not be treated as missing") }
-        catch (e: DavException) { assertEquals(403, e.status) }
+        catch (e: DavException) {
+            assertEquals(403, e.status)
+            assertTrue(e.message!!.contains("Fortschritt lesen / GET (HTTP 403)"))
+            assertFalse(e.message!!.contains("app-password"))
+        }
     }
     @Test fun conditionalWritesDetectConcurrentChanges() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(412))

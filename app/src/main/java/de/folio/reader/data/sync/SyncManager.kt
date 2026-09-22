@@ -45,6 +45,7 @@ class SyncManager @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val progressRepo: ProgressRepository,
     private val bookRepository: BookRepository,
+    private val failureStore: SyncFailureStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val workManager get() = WorkManager.getInstance(context)
@@ -115,6 +116,10 @@ class SyncManager @Inject constructor(
                     SyncStatus(message = infos.first { it.state == WorkInfo.State.FAILED }.outputData.getString(SyncWorker.KEY_MESSAGE) ?: "Synchronisierung fehlgeschlagen")
                 else -> SyncStatus()
             }
+        }.combine(failureStore.message) { status, failure ->
+            if (!status.running && failure != null) {
+                status.copy(message = listOfNotNull(status.message?.takeUnless { it == failure }, failure).joinToString("\n"))
+            } else status
         }.combine(backgroundError) { status, error ->
             if (!status.running && status.message == null && error != null) status.copy(message = error) else status
         }
