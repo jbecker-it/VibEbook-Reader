@@ -251,17 +251,10 @@ class BookRepository @Inject constructor(
         if (bookDao.getById(bookId)?.missingRemotely == true) return@withLock
         val remotePath = progressFilePath(settings, bookId)
 
-        val local = progressRepo.read(bookId)
-        val remoteFile = nextcloudClient.readTextOrNull(settings, remotePath)
-        val remote = remoteFile?.let { ReadingProgress.fromJson(it.content) }
-        require(remote == null || remote.bookId == bookId) { "Fortschrittsdatei gehört zu einem anderen Buch." }
-
-        val merged = ReadingProgress.merge(local, remote) ?: return@withLock
-
-        if (merged != remote) {
-            nextcloudClient.writeText(settings, remotePath, merged.toJson(), remoteFile)
-        }
-        if (merged != local) {
+        val merged = nextcloudClient.syncProgress(settings, remotePath, bookId) {
+            progressRepo.read(bookId)
+        } ?: return@withLock
+        if (merged != progressRepo.read(bookId)) {
             progressRepo.write(merged, notify = true)
         }
 

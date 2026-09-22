@@ -1,6 +1,7 @@
 package de.folio.reader.data.nextcloud
 
 import de.folio.reader.domain.model.NextcloudSettings
+import de.folio.reader.domain.model.ReadingProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -113,7 +114,11 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
     }
 
     suspend fun readTextOrNull(settings: NextcloudSettings, path: String): RemoteText? = withContext(Dispatchers.IO) {
-        execute(settings, path, "GET").use { response ->
+        // Compression proxies can alter ETags; conditional PUT needs the identity representation.
+        // Revalidate even cached 404s, especially after a failed create (If-None-Match: *).
+        execute(settings, path, "GET", headers = mapOf(
+            "Accept-Encoding" to "identity", "Cache-Control" to "no-cache, no-store"
+        )).use { response ->
             if (response.code == 404) return@withContext null
             if (response.code != 200) throw DavException(response.code, "Fortschritt lesen / GET")
             val content = response.body?.byteStream()?.use { input ->
@@ -121,6 +126,27 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
             } ?: throw IOException("Leere Fortschrittsdatei.")
             RemoteText(content, response.header("ETag"))
         }
+    }
+
+    /** Re-read and merge after a concurrent write; never retry a stale payload/token. */
+    suspend fun syncProgress(settings: NextcloudSettings, path: String, bookId: String,
+        readLocal: suspend () -> ReadingProgress?): ReadingProgress? {
+        repeat(3) { attempt ->
+            val remoteFile = readTextOrNull(settings, path)
+            val remote = remoteFile?.let { ReadingProgress.fromJson(it.content) }
+            require(remote == null || remote.bookId == bookId) { "Fortschrittsdatei gehört zu einem anderen Buch." }
+            val local = readLocal()
+            require(local == null || local.bookId == bookId) { "Lokaler Fortschritt gehört zu einem anderen Buch." }
+            val merged = ReadingProgress.merge(local, remote) ?: return null
+            if (merged == remote) return merged
+            try {
+                writeText(settings, path, merged.toJson(), remoteFile)
+                return merged
+            } catch (e: DavException) {
+                if (e.status != 412 || attempt == 2) throw e
+            }
+        }
+        error("Unreachable")
     }
 
     suspend fun writeText(settings: NextcloudSettings, path: String, text: String, previous: RemoteText?) {
