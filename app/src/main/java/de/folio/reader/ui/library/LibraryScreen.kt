@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.CircularProgressIndicator
@@ -54,6 +56,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -440,33 +445,37 @@ private fun BookCard(
             }
 
             val fraction = book.readFraction
-            when {
-                book.isFinished -> {
-                    // Fertig-Haken unten rechts
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = "Fertig gelesen",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(6.dp)
-                            .size(26.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.35f)),
-                    )
-                }
+            if (!book.isFinished && fraction > 0.005f && book.downloaded) {
+                // Fortschrittsbalken am unteren Cover-Rand
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    trackColor = Color.Black.copy(alpha = 0.35f),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(5.dp),
+                )
+            }
 
-                fraction > 0.005f && book.downloaded -> {
-                    // Fortschrittsbalken am unteren Cover-Rand
-                    LinearProgressIndicator(
-                        progress = { fraction },
-                        trackColor = Color.Black.copy(alpha = 0.35f),
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .height(5.dp),
-                    )
-                }
+            // Gelesen-Schalter direkt auf dem Cover, passend zum Favoriten-Herz.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .toggleable(value = book.isFinished, role = Role.Checkbox,
+                        onValueChange = { onToggleFinished() })
+                    .semantics { stateDescription = if (book.isFinished) "Gelesen" else "Ungelesen" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (book.isFinished) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                    contentDescription = if (book.isFinished) "Als ungelesen markieren" else "Als gelesen markieren",
+                    tint = if (book.isFinished) MaterialTheme.colorScheme.primary else Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
             }
         }
 
@@ -485,9 +494,6 @@ private fun BookCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-        }
-        androidx.compose.material3.OutlinedButton(onClick = onToggleFinished, modifier = Modifier.fillMaxWidth()) {
-            Text(if (book.isFinished) "Als ungelesen markieren" else "Als gelesen markieren")
         }
         if (book.missingRemotely) {
             Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)
