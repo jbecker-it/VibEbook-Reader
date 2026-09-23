@@ -8,19 +8,28 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Verwaltet die lokalen Fortschrittsdateien (filesDir/progress/<id>.json).
  * Jeder Schreibvorgang signalisiert über [changes], dass eine Synchronisierung
- * mit dem NAS ansteht.
+ * mit dem Nextcloud ansteht.
  */
 @Singleton
 class ProgressRepository @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     private val dir: File by lazy { File(context.filesDir, "progress").apply { mkdirs() } }
+
+    /**
+     * In-Memory-Spiegel der Fortschrittsdateien. Der Cache wird beim Schreiben
+     * sofort aktualisiert, damit ein direkt darauf folgendes Öffnen des Buches
+     * nie einen veralteten Stand von der Platte liest.
+     */
+    private val cache = ConcurrentHashMap<String, ReadingProgress>()
+    private val writeMutex = kotlinx.coroutines.sync.Mutex()
 
     private val _changes = MutableSharedFlow<String>(extraBufferCapacity = 64)
     /** Emittiert die bookId, sobald sich ein lokaler Fortschritt geändert hat. */
@@ -29,21 +38,33 @@ class ProgressRepository @Inject constructor(
     private fun fileFor(bookId: String) = File(dir, "$bookId.json")
 
     suspend fun read(bookId: String): ReadingProgress? = withContext(Dispatchers.IO) {
+        cache[bookId]?.let { return@withContext it }
         val f = fileFor(bookId)
-        if (!f.exists()) return@withContext null
-        runCatching { ReadingProgress.fromJson(f.readText()) }.getOrNull()
+        if (!f.exists() && !File(f.path + ".bak").exists()) return@withContext null
+        runCatching { ReadingProgress.fromJson(android.util.AtomicFile(f).openRead().bufferedReader().use { it.readText() }) }.getOrNull()
+            ?.also { cache[it.bookId] = it }
     }
 
     suspend fun readAll(): Map<String, ReadingProgress> = withContext(Dispatchers.IO) {
-        dir.listFiles { f -> f.extension == "json" }
+        val fromDisk = dir.listFiles { f -> f.extension == "json" }
             ?.mapNotNull { f -> runCatching { ReadingProgress.fromJson(f.readText()) }.getOrNull() }
             ?.associateBy { it.bookId }
             ?: emptyMap()
+        // Cache gewinnt: er enthält ggf. Schreibvorgänge, die noch nicht auf der Platte sind.
+        fromDisk + cache
     }
 
     /** Schreibt lokal und stößt eine spätere Synchronisierung an. */
     suspend fun write(progress: ReadingProgress, notify: Boolean = true) = withContext(Dispatchers.IO) {
-        fileFor(progress.bookId).writeText(progress.toJson())
-        if (notify) _changes.tryEmit(progress.bookId)
+        writeMutex.lock()
+        try {
+            val merged = ReadingProgress.merge(read(progress.bookId), progress)!!
+            val file = android.util.AtomicFile(fileFor(merged.bookId))
+            val stream = file.startWrite()
+            try { stream.write(merged.toJson().toByteArray(Charsets.UTF_8)); file.finishWrite(stream) }
+            catch (e: Exception) { file.failWrite(stream); throw e }
+            cache[merged.bookId] = merged
+            if (notify) _changes.tryEmit(merged.bookId)
+        } finally { writeMutex.unlock() }
     }
 }

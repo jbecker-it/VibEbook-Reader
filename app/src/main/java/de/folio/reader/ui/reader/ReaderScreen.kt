@@ -64,8 +64,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.folio.reader.domain.model.PageLayoutMode
+import de.folio.reader.domain.model.ReaderPreferences
+import android.view.KeyEvent
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -88,18 +93,68 @@ fun ReaderScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val pageLayout by viewModel.pageLayout.collectAsStateWithLifecycle()
     val eInk by viewModel.eInkMode.collectAsStateWithLifecycle()
+    val readerPreferences by viewModel.readerPreferences.collectAsStateWithLifecycle()
+    val readerView = LocalView.current
+    DisposableEffect(readerPreferences.lockOrientation, readerPreferences.keepScreenOn) {
+        val activity = readerView.context.findActivity()
+        val oldOrientation = activity?.requestedOrientation
+        val oldKeepScreenOn = readerView.keepScreenOn
+        readerView.keepScreenOn = readerPreferences.keepScreenOn
+        if (readerPreferences.lockOrientation) activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LOCKED
+        onDispose {
+            readerView.keepScreenOn = oldKeepScreenOn
+            if (oldOrientation != null) activity?.requestedOrientation = oldOrientation
+        }
+    }
 
     var menuVisible by rememberSaveable { mutableStateOf(false) }
+    var typographyVisible by remember { mutableStateOf(false) }
+    if (typographyVisible) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { typographyVisible = false },
+            title = { Text("Schrift und Darstellung") },
+            text = {
+                Column {
+                    Text("Darstellung für dieses Buch")
+                    de.folio.reader.domain.model.BookLayoutMode.entries.forEach { mode ->
+                        androidx.compose.material3.TextButton(onClick = { viewModel.setLayoutMode(mode) }) {
+                            Text((if (state.layoutMode == mode) "✓ " else "") + mode.label)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.TextButton(onClick = { viewModel.setReaderPreferences(readerPreferences.copy(fontSize = readerPreferences.fontSize - 2)) }) { Text("A−") }
+                        Text("${readerPreferences.fontSize}")
+                        androidx.compose.material3.TextButton(onClick = { viewModel.setReaderPreferences(readerPreferences.copy(fontSize = readerPreferences.fontSize + 2)) }) { Text("A+") }
+                    }
+                    androidx.compose.material3.TextButton(onClick = { viewModel.setReaderPreferences(readerPreferences.copy(sansSerif = !readerPreferences.sansSerif)) }) { Text(if (readerPreferences.sansSerif) "Schrift: Sans-Serif" else "Schrift: Serif") }
+                    Text("Weitere Lese- und Tastenoptionen in den Einstellungen.")
+                }
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { typographyVisible = false }) { Text("Fertig") } },
+        )
+    }
 
-    BackHandler { onBack() }
+    BackHandler { if (menuVisible) menuVisible = false else onBack() }
     DisposableEffect(bookId) { onDispose { viewModel.saveNow() } }
+
+    // Auch bei ON_STOP speichern: App in den Hintergrund, Display aus oder
+    // Foldable zugeklappt – nicht nur beim Navigieren zurück.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) viewModel.saveNow()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     HideSystemBars(hidden = !menuVisible)
 
     val colorScheme = MaterialTheme.colorScheme
     val bgHex = remember(colorScheme.background) { colorScheme.background.toCssHex() }
     val fgHex = remember(colorScheme.onBackground) { colorScheme.onBackground.toCssHex() }
     val linkHex = remember(colorScheme.primary) { colorScheme.primary.toCssHex() }
-    val forceColors = bgHex != "#FFFFFF"
+    val forceColors = eInk || bgHex != "#FFFFFF"
 
     val windowWidthDp = LocalConfiguration.current.screenWidthDp
     val twoPage = when (pageLayout) {
@@ -121,7 +176,7 @@ fun ReaderScreen(
     ) {
         val book = state.book
         when {
-            state.loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            state.loading -> if (eInk) Text("Buch öffnen …", Modifier.align(Alignment.Center)) else CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
 
             book == null || book.spine.isEmpty() -> Text(
                 text = "Dieses Buch konnte nicht geöffnet werden.",
@@ -129,8 +184,13 @@ fun ReaderScreen(
                 color = colorScheme.onSurfaceVariant,
             )
 
-            else -> EpubWebView(
+            else -> androidx.compose.runtime.key(book.id, state.layoutMode) { EpubWebView(
                 filePath = book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)],
+                fixedLayout = when (state.layoutMode) {
+                    de.folio.reader.domain.model.BookLayoutMode.ORIGINAL -> true
+                    de.folio.reader.domain.model.BookLayoutMode.REFLOWABLE -> false
+                    else -> state.layouts[book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)]]
+                },
                 restoreFraction = state.restoreScrollFraction,
                 restoreCharOffset = state.restoreCharOffset,
                 twoPage = twoPage,
@@ -139,11 +199,13 @@ fun ReaderScreen(
                 textHex = fgHex,
                 linkHex = linkHex,
                 forceColors = forceColors,
+                preferences = readerPreferences,
+                menuVisible = menuVisible,
                 onPosition = viewModel::onPosition,
                 onToggleMenu = { menuVisible = !menuVisible },
                 onNextChapter = viewModel::nextChapter,
                 onPrevChapter = viewModel::previousChapter,
-            )
+            ) }
         }
 
         AnimatedVisibility(
@@ -157,6 +219,7 @@ fun ReaderScreen(
                 favorite = state.favorite,
                 onBack = onBack,
                 onToggleFavorite = viewModel::toggleFavorite,
+                onTypography = { typographyVisible = true },
             )
         }
 
@@ -184,10 +247,11 @@ private fun TopOverlay(
     favorite: Boolean,
     onBack: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onTypography: () -> Unit,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        tonalElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -199,6 +263,7 @@ private fun TopOverlay(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Zurück")
             }
+            androidx.compose.material3.TextButton(onClick = onTypography) { Text("Aa") }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
@@ -232,8 +297,8 @@ private fun BottomOverlay(
         .roundToInt().coerceIn(0, 100)
 
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        tonalElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
     ) {
         Column(
             modifier = Modifier
@@ -282,6 +347,7 @@ private fun BottomOverlay(
 @Composable
 private fun EpubWebView(
     filePath: String,
+    fixedLayout: Boolean?,
     restoreFraction: Float,
     restoreCharOffset: Int,
     twoPage: Boolean,
@@ -290,6 +356,8 @@ private fun EpubWebView(
     textHex: String,
     linkHex: String,
     forceColors: Boolean,
+    preferences: ReaderPreferences,
+    menuVisible: Boolean,
     onPosition: (Float, Int) -> Unit,
     onToggleMenu: () -> Unit,
     onNextChapter: () -> Unit,
@@ -302,16 +370,24 @@ private fun EpubWebView(
     bridge.prevChapterListener = onPrevChapter
 
     val webViewRef = remember { arrayOfNulls<WebView>(1) }
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewRef[0]?.apply { stopLoading(); removeJavascriptInterface("AndroidReader"); destroy() }
+            webViewRef[0] = null
+        }
+    }
     val lastLoaded = remember { arrayOfNulls<String>(1) }
     val injection = remember { arrayOf("") }
     injection[0] = buildInjection(
         restoreFraction, restoreCharOffset, twoPage, smoothTurns,
         backgroundHex, textHex, linkHex, forceColors,
+        preferences,
+        fixedLayout,
     )
 
     // Layout-/Themewechsel ohne Neuladen anwenden: erneut injizieren – das
     // Skript repaginiert und hält die Position über den Zeichen-Anker.
-    LaunchedEffect(twoPage, smoothTurns, backgroundHex, textHex, forceColors) {
+    LaunchedEffect(twoPage, smoothTurns, backgroundHex, textHex, forceColors, preferences) {
         webViewRef[0]?.evaluateJavascript(injection[0], null)
     }
 
@@ -321,14 +397,28 @@ private fun EpubWebView(
             WebView(ctx).apply {
                 settings.javaScriptEnabled = true
                 settings.allowFileAccess = true
+                settings.allowContentAccess = false
+                settings.allowFileAccessFromFileURLs = false
+                settings.allowUniversalAccessFromFileURLs = false
+                settings.blockNetworkLoads = true
                 settings.builtInZoomControls = false
                 settings.textZoom = 100
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
                 overScrollMode = View.OVER_SCROLL_NEVER
-                addJavascriptInterface(bridge, "AndroidReader")
+                installReaderBridge(bridge)
                 setBackgroundColor(android.graphics.Color.parseColor(backgroundHex))
                 webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
+                        return request.url.buildUpon().fragment(null).build().toString() != Uri.fromFile(File(lastLoaded[0] ?: filePath)).toString()
+                    }
+                    override fun shouldInterceptRequest(view: WebView, request: android.webkit.WebResourceRequest): android.webkit.WebResourceResponse? {
+                        val root = File(ctx.filesDir, "books").canonicalPath + File.separator
+                        val allowed = request.url.scheme == "file" && runCatching {
+                            File(request.url.path.orEmpty()).canonicalPath.startsWith(root)
+                        }.getOrDefault(false)
+                        return if (allowed) null else android.webkit.WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                    }
                     override fun onPageFinished(view: WebView, url: String?) {
                         view.evaluateJavascript(injection[0], null)
                     }
@@ -337,13 +427,30 @@ private fun EpubWebView(
             }
         },
         update = { web ->
+            web.setOnKeyListener { _, keyCode, event ->
+                val command = ReaderKeys.command(keyCode, menuVisible, preferences.volumeKeys)
+                if (command != null) {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) web.evaluateJavascript("window.__folio && window.__folio.$command();", null)
+                    true
+                } else if (keyCode == KeyEvent.KEYCODE_MENU || (!menuVisible && keyCode == KeyEvent.KEYCODE_DPAD_CENTER)) {
+                    if (event.action == KeyEvent.ACTION_UP) onToggleMenu()
+                    true
+                } else false
+            }
+            web.keepScreenOn = preferences.keepScreenOn
             web.setBackgroundColor(android.graphics.Color.parseColor(backgroundHex))
             if (lastLoaded[0] != filePath) {
                 lastLoaded[0] = filePath
                 web.loadUrl(Uri.fromFile(File(filePath)).toString())
+                web.requestFocus()
             }
         },
     )
+}
+
+// A concrete parameter avoids lint treating Compose remember's inferred bridge as generic T.
+private fun WebView.installReaderBridge(bridge: ReaderBridge) {
+    addJavascriptInterface(bridge, "AndroidReader")
 }
 
 /** Brücke vom WebView-JavaScript nach Kotlin (JS-Thread → Main-Thread). */
@@ -386,7 +493,7 @@ private class ReaderBridge(private val handler: Handler) {
  * sind die Offsets geräteunabhängig – unabhängig von Displaygröße und Layout.
  * Fallback bleibt der Kapitel-Anteil 0..1 (alte Fortschrittsdateien).
  */
-private fun buildInjection(
+internal fun buildInjection(
     restoreFraction: Float,
     restoreCharOffset: Int,
     twoPage: Boolean,
@@ -395,6 +502,8 @@ private fun buildInjection(
     textHex: String,
     linkHex: String,
     forceColors: Boolean,
+    preferences: ReaderPreferences,
+    fixedLayout: Boolean? = null,
 ): String {
     val frac = restoreFraction.coerceIn(0f, 1f).toString()
     val colorRules = if (forceColors) {
@@ -405,7 +514,7 @@ private fun buildInjection(
     } else {
         "html,body{background:$backgroundHex;color:$textHex;}a{color:$linkHex;}"
     }
-    val colorScheme = if (forceColors) "dark" else "normal"
+    val colorScheme = if (backgroundHex == "#FFFFFF") "light" else "dark"
 
     return """
     (function() {
@@ -414,8 +523,11 @@ private fun buildInjection(
 
         F.twoPage = $twoPage;
         F.smoothTurns = $smoothTurns;
+        F.leftHanded = ${preferences.leftHanded};
+        F.zone = ${if (preferences.wideTapZones) "0.4" else "0.3"};
         F.colorRules = ${jsString(colorRules)};
         F.colorScheme = "$colorScheme";
+        F.declaredFixed = ${fixedLayout?.toString() ?: "null"};
         if (firstRun) {
             F.fraction = $frac;          // Kapitel-Anteil 0..1 (Fallback)
             F.anchor = $restoreCharOffset; // Zeichen-Offset, -1 = keiner
@@ -425,8 +537,43 @@ private fun buildInjection(
             F.PH = 24;
         }
 
-        if (firstRun && !document.querySelector('meta[name=viewport]')) {
-            var m = document.createElement('meta');
+        if (firstRun) {
+            // Publisher transforms can shrink a large artwork/text canvas together.
+            // Capture once, before our stylesheet; never compound our own screen transform.
+            var authored = getComputedStyle(document.body);
+            var origin = authored.transformOrigin.split(' ');
+            F.authorTransform = authored.transform === 'none' ? '' :
+                ' translate(' + origin[0] + ',' + origin[1] + ') ' + authored.transform +
+                ' translate(' + (-parseFloat(origin[0])) + 'px,' + (-parseFloat(origin[1])) + 'px)';
+            var m = document.querySelector('meta[name=viewport]');
+            var viewport = m ? m.content : '';
+            var width = viewport.match(/(?:^|[,;\s])width\s*=\s*([\d.]+)/i);
+            var height = viewport.match(/(?:^|[,;\s])height\s*=\s*([\d.]+)/i);
+            F.pageWidth = width ? Number(width[1]) : 0;
+            F.pageHeight = height ? Number(height[1]) : 0;
+            // Older PDF-to-EPUB exports often omit rendition/viewport metadata.
+            // Require a sized canvas containing artwork AND positioned text, not just an illustration.
+            var canvas = null;
+            var candidates = Array.from(document.querySelectorAll('div,section')).concat([document.body]);
+            for (var candidate of candidates) {
+                if (!candidate || !candidate.querySelector('img,svg')) continue;
+                var cs = getComputedStyle(candidate);
+                var positionedText = Array.from(candidate.querySelectorAll('p,span,div')).some(function(node) {
+                    return node.textContent.trim() && getComputedStyle(node).position === 'absolute';
+                });
+                var cw = Math.max(parseFloat(cs.width), candidate.scrollWidth);
+                var ch = Math.max(parseFloat(cs.height), candidate.scrollHeight);
+                if (positionedText && cw > 200 && ch > 200 && cs.width.endsWith('px') && cs.height.endsWith('px')) {
+                    canvas = {width:cw,height:ch};
+                    break;
+                }
+            }
+            F.fixed = F.declaredFixed === true || (F.declaredFixed !== false &&
+                ((F.pageWidth > 0 && F.pageHeight > 0) || canvas !== null));
+            if (F.fixed && !(F.pageWidth > 0 && F.pageHeight > 0) && canvas) {
+                F.pageWidth = canvas.width; F.pageHeight = canvas.height;
+            }
+            if (!m) m = document.createElement('meta');
             m.name = 'viewport';
             m.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
             document.head.appendChild(m);
@@ -519,9 +666,55 @@ private fun buildInjection(
                 F.colorRules;
         };
 
+        // A fixed page is one canvas: preserve publisher CSS and scale every layer together.
+        F.layoutFixed = function(W, H) {
+            var body = document.body;
+            if (!(F.pageWidth > 0 && F.pageHeight > 0)) {
+                var svg = body.querySelector('svg[viewBox]');
+                var box = svg && svg.viewBox.baseVal;
+                var css = getComputedStyle(body);
+                var img = body.querySelector('img');
+                F.pageWidth = box && box.width > 0 ? box.width : parseFloat(css.width);
+                F.pageHeight = box && box.height > 0 ? box.height : parseFloat(css.height);
+                if (!(F.pageHeight > 0) && img && img.naturalWidth > 0) {
+                    F.pageWidth = img.naturalWidth; F.pageHeight = img.naturalHeight;
+                }
+                if (!(F.pageWidth > 0 && F.pageHeight > 0)) return;
+            }
+            var scale = Math.min(W / F.pageWidth, H / F.pageHeight);
+            var x = (W - F.pageWidth * scale) / 2;
+            var y = (H - F.pageHeight * scale) / 2;
+            var style = document.getElementById('folio-style');
+            if (!style) {
+                style = document.createElement('style'); style.id = 'folio-style';
+                document.head.appendChild(style);
+            }
+            style.textContent = 'html{margin:0!important;padding:0!important;overflow:hidden!important;background:#fff!important;}' +
+                'body{position:absolute!important;left:0!important;top:0!important;margin:0!important;' +
+                'width:' + F.pageWidth + 'px!important;height:' + F.pageHeight + 'px!important;' +
+                'transform-origin:0 0!important;transform:translate(' + x + 'px,' + y + 'px) scale(' + scale + ')' + F.authorTransform + '!important;' +
+                'overflow:visible!important;touch-action:none;-webkit-text-size-adjust:100%;}' +
+                '::-webkit-scrollbar{display:none;}';
+            F.screen = 0; F.screens = 1; F.step = W; F.anchor = -1;
+            window.scrollTo(0, 0);
+            if (window.AndroidReader) AndroidReader.onPosition(F.fraction, -1);
+        };
+
         F.layout = function() {
             var W = window.innerWidth, H = window.innerHeight;
-            var GAP = 48, PH = 24, PV = 28;
+            // Während eines Display-Wechsels (Foldable auf-/zuklappen) kann das
+            // Fenster kurz 0 groß sein – dann nicht layouten, sonst landet man
+            // am Kapitelanfang. Kurz darauf erneut versuchen.
+            if (W <= 0 || H <= 0 || !document.body) {
+                clearTimeout(F.retryTimer);
+                F.retryTimer = setTimeout(F.layout, 120);
+                return;
+            }
+            if (F.fixed) { F.layoutFixed(W, H); return; }
+            var GAP = 48, PH = ${preferences.margin}, PV = 28;
+            document.body.style.setProperty('font-size', '${preferences.fontSize}px', 'important');
+            document.body.style.setProperty('font-family', '${if (preferences.sansSerif) "sans-serif" else "serif"}', 'important');
+            document.body.style.setProperty('line-height', '${preferences.lineHeight}', 'important');
             var k = F.twoPage ? 2 : 1;
             var C = Math.floor((W - 2 * PH - (k - 1) * GAP) / k);
             F.PH = PH;
@@ -540,15 +733,22 @@ private fun buildInjection(
             if (target < 0) {
                 target = F.screens <= 1 ? 0 : Math.round(F.fraction * (F.screens - 1));
             }
-            F.setScreen(target, false);
+            F.setScreen(target, false, false);
         };
 
-        F.setScreen = function(i, smooth) {
+        /**
+         * [fromUser]: true bei echtem Blättern/Springen – nur dann wird der
+         * Zeichen-Anker neu bestimmt. Layout-Wiederherstellungen (Resize,
+         * Fold/Unfold, Nachpaginieren) lassen den Anker unverändert, sonst
+         * driftet die Position mit jedem Re-Layout um Seiten weiter.
+         */
+        F.setScreen = function(i, smooth, fromUser) {
             i = Math.max(0, Math.min(F.screens - 1, i));
             F.screen = i;
             if (F.screens > 1) F.fraction = i / (F.screens - 1);
-            var a = F.offsetForPage(i);
-            if (a >= 0) F.anchor = a;
+            if (fromUser) {
+                F.anchor = F.offsetForPage(i);
+            }
             window.scrollTo({
                 left: i * F.step,
                 top: 0,
@@ -561,7 +761,7 @@ private fun buildInjection(
 
         F.next = function() {
             if (F.screen < F.screens - 1) {
-                F.setScreen(F.screen + 1, true);
+                F.setScreen(F.screen + 1, true, true);
             } else {
                 F.fraction = 1;
                 if (window.AndroidReader) {
@@ -573,7 +773,7 @@ private fun buildInjection(
 
         F.prev = function() {
             if (F.screen > 0) {
-                F.setScreen(F.screen - 1, true);
+                F.setScreen(F.screen - 1, true, true);
             } else {
                 if (window.AndroidReader) AndroidReader.onPrevChapter();
             }
@@ -587,8 +787,9 @@ private fun buildInjection(
                 var t = e.target;
                 if (t && t.closest && t.closest('a')) return; // Links normal folgen
                 var x = e.clientX / window.innerWidth;
-                if (x <= 0.3) F.prev();
-                else if (x >= 0.7) F.next();
+                if (Date.now() - (F.lastSwipe || 0) < 400) return;
+                if (x <= F.zone) { if (F.leftHanded) F.next(); else F.prev(); }
+                else if (x >= 1 - F.zone) { if (F.leftHanded) F.prev(); else F.next(); }
                 else if (window.AndroidReader) AndroidReader.onToggleMenu();
             }, true);
 
@@ -606,6 +807,7 @@ private fun buildInjection(
                 var dy = c.clientY - touchY;
                 var dt = Date.now() - touchT;
                 if (dt < 600 && Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+                    F.lastSwipe = Date.now();
                     if (dx < 0) F.next(); else F.prev();
                 }
             }, { passive: true });

@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.folio.reader.domain.model.PageLayoutMode
-import de.folio.reader.domain.model.SmbSettings
+import de.folio.reader.domain.model.NextcloudSettings
 import de.folio.reader.domain.model.ThemeMode
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -51,36 +51,35 @@ fun SettingsScreen(
     onClose: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val saved by viewModel.smbSettings.collectAsStateWithLifecycle()
+    val saved by viewModel.nextcloudSettings.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val pageLayout by viewModel.pageLayout.collectAsStateWithLifecycle()
     val wifiOnly by viewModel.wifiOnly.collectAsStateWithLifecycle()
     val eInkMode by viewModel.eInkMode.collectAsStateWithLifecycle()
     val connectionTest by viewModel.connectionTest.collectAsStateWithLifecycle()
+    val reader by viewModel.readerPreferences.collectAsStateWithLifecycle()
 
     androidx.activity.compose.BackHandler { onClose() }
 
-    var host by remember { mutableStateOf("") }
-    var share by remember { mutableStateOf("") }
+    var serverUrl by remember { mutableStateOf("") }
     var user by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var domain by remember { mutableStateOf("") }
     var rootPath by remember { mutableStateOf("") }
     var progressDir by remember { mutableStateOf(".folio-progress") }
     var seeded by remember { mutableStateOf(false) }
 
     LaunchedEffect(saved) {
-        if (!seeded && saved != SmbSettings()) {
-            host = saved.host; share = saved.shareName; user = saved.username
-            password = saved.password; domain = saved.domain; rootPath = saved.rootPath
+        if (!seeded && saved != NextcloudSettings()) {
+            serverUrl = saved.serverUrl; user = saved.username
+            password = saved.password; rootPath = saved.rootPath
             progressDir = saved.progressDir
             seeded = true
         }
     }
 
-    fun current() = SmbSettings(
-        host = host.trim(), shareName = share.trim(), username = user.trim(),
-        password = password, domain = domain.trim(), rootPath = rootPath.trim(),
+    fun current() = NextcloudSettings(
+        serverUrl = serverUrl.trim(), username = user.trim(),
+        password = password, rootPath = rootPath.trim('/'),
         progressDir = progressDir.trim().ifBlank { ".folio-progress" },
     )
 
@@ -131,6 +130,16 @@ fun SettingsScreen(
             }
 
             SectionTitle("Seitenlayout")
+            Text("Lesen: Links/rechts tippen zum Blättern, Mitte für das Menü. Seitentasten und Steuerkreuz werden unterstützt.")
+            PreferenceStepper("Schriftgröße: ${reader.fontSize}", { viewModel.setReaderPreferences(reader.copy(fontSize = reader.fontSize - 2)) }, { viewModel.setReaderPreferences(reader.copy(fontSize = reader.fontSize + 2)) })
+            PreferenceStepper("Zeilenabstand: ${String.format(java.util.Locale.ROOT, "%.1f", reader.lineHeight)}", { viewModel.setReaderPreferences(reader.copy(lineHeight = reader.lineHeight - 0.1f)) }, { viewModel.setReaderPreferences(reader.copy(lineHeight = reader.lineHeight + 0.1f)) })
+            PreferenceStepper("Seitenrand: ${reader.margin}", { viewModel.setReaderPreferences(reader.copy(margin = reader.margin - 4)) }, { viewModel.setReaderPreferences(reader.copy(margin = reader.margin + 4)) })
+            PreferenceSwitch("Serifenlose Schrift", reader.sansSerif) { viewModel.setReaderPreferences(reader.copy(sansSerif = it)) }
+            PreferenceSwitch("Linkshändig (Tap-Zonen tauschen)", reader.leftHanded) { viewModel.setReaderPreferences(reader.copy(leftHanded = it)) }
+            PreferenceSwitch("Breite Tap-Zonen (40 / 20 / 40 %)", reader.wideTapZones) { viewModel.setReaderPreferences(reader.copy(wideTapZones = it)) }
+            PreferenceSwitch("Lautstärketasten zum Blättern", reader.volumeKeys) { viewModel.setReaderPreferences(reader.copy(volumeKeys = it)) }
+            PreferenceSwitch("Ausrichtung beim Lesen sperren", reader.lockOrientation) { viewModel.setReaderPreferences(reader.copy(lockOrientation = it)) }
+            PreferenceSwitch("Display beim Lesen eingeschaltet lassen", reader.keepScreenOn) { viewModel.setReaderPreferences(reader.copy(keepScreenOn = it)) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PageLayoutMode.entries.forEach { mode ->
                     FilterChip(
@@ -146,15 +155,11 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            SectionTitle("NAS-Verbindung (SMB)")
+            SectionTitle("Nextcloud-Verbindung")
+            Text("In Nextcloud unter Persönliche Einstellungen → Sicherheit ein App-Passwort erstellen. Ordner sind relativ zu deinen Nextcloud-Dateien.")
             OutlinedTextField(
-                value = host, onValueChange = { host = it },
-                label = { Text("Host / IP (z. B. 192.168.1.20)") },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = share, onValueChange = { share = it },
-                label = { Text("Freigabename (z. B. Books)") },
+                value = serverUrl, onValueChange = { serverUrl = it },
+                label = { Text("Serveradresse (https://cloud.example.com)") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
@@ -164,16 +169,11 @@ fun SettingsScreen(
             )
             OutlinedTextField(
                 value = password, onValueChange = { password = it },
-                label = { Text("Passwort") },
+                label = { Text("App-Passwort") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = domain, onValueChange = { domain = it },
-                label = { Text("Domäne (optional)") },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = rootPath, onValueChange = { rootPath = it },
@@ -191,14 +191,13 @@ fun SettingsScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(
                     onClick = { viewModel.testConnection(current()) },
-                    enabled = host.isNotBlank() && share.isNotBlank(),
+                    enabled = current().isConfigured && connectionTest != ConnectionTest.Testing,
                 ) { Text("Verbindung testen") }
                 Button(
                     onClick = {
-                        viewModel.saveSmb(current())
-                        viewModel.resetConnectionTest()
-                        onClose()
+                        viewModel.saveNextcloud(current(), onClose)
                     },
+                    enabled = current().isConfigured && connectionTest != ConnectionTest.Testing,
                 ) { Text("Speichern") }
             }
 
@@ -209,9 +208,9 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Nur über WLAN synchronisieren", style = MaterialTheme.typography.bodyLarge)
+                    Text("Nur ungetaktete Netzwerke", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "Schont das mobile Datenvolumen beim Buch-Download.",
+                        "Zum Beispiel WLAN ohne Datenlimit. Gilt auch für den Fortschrittsabgleich.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -249,6 +248,23 @@ private fun SectionTitle(text: String) {
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(top = 12.dp),
     )
+}
+
+@Composable
+private fun PreferenceSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+private fun PreferenceStepper(label: String, less: () -> Unit, more: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, Modifier.weight(1f))
+        OutlinedButton(onClick = less) { Text("−") }
+        OutlinedButton(onClick = more) { Text("+") }
+    }
 }
 
 private fun PageLayoutMode.label() = when (this) {

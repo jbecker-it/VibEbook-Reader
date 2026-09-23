@@ -14,8 +14,11 @@ android {
         applicationId = "de.folio.reader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Keep this workflow's run counter for every distributed APK; reruns retain the same version.
+        versionCode = providers.environmentVariable("FOLIO_VERSION_CODE").orNull?.toInt()?.also {
+            require(it in 1..2100000000) { "Invalid FOLIO_VERSION_CODE" }
+        } ?: 1
+        versionName = "1.0.$versionCode"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -42,8 +45,6 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
-            // smbj / bouncycastle bring duplicate notices
-            excludes += "META-INF/DEPENDENCIES"
         }
     }
 }
@@ -83,10 +84,11 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
 
-    // SMB / NAS
-    implementation(libs.smbj)
-    implementation(libs.bouncycastle)
-    implementation(libs.slf4j.simple)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
 
     // Image loading (covers)
     implementation(libs.coil.compose)

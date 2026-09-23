@@ -20,7 +20,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -39,27 +45,60 @@ class SyncManager @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val progressRepo: ProgressRepository,
     private val bookRepository: BookRepository,
+    private val failureStore: SyncFailureStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val workManager get() = WorkManager.getInstance(context)
+    private val backgroundError = MutableStateFlow<String?>(null)
+
+    private val network = callbackFlow {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+        fun emitState() { trySend(NetworkState(cm.activeNetwork != null, cm.isActiveNetworkMetered)) }
+        val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) = emitState()
+            override fun onLost(network: android.net.Network) = emitState()
+            override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) = emitState()
+        }
+        cm.registerDefaultNetworkCallback(callback)
+        emitState()
+        awaitClose { cm.unregisterNetworkCallback(callback) }
+    }.distinctUntilChanged()
+
+    private suspend fun reportSync(block: suspend () -> Unit) {
+        try { block(); backgroundError.value = null }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { backgroundError.value = e.message ?: "Fortschrittsabgleich fehlgeschlagen" }
+    }
 
     init {
-        // Jede lokale Fortschrittsänderung möglichst zeitnah aufs NAS bringen.
+        // Jede lokale Fortschrittsänderung möglichst zeitnah aufs Nextcloud bringen.
         scope.launch {
             progressRepo.changes.collect { bookId ->
-                runCatching { bookRepository.syncProgress(bookId) }
+                reportSync { bookRepository.syncProgress(bookId) }
+            }
+        }
+        scope.launch {
+            settingsRepo.wifiOnly.distinctUntilChanged().collect {
+                schedulePeriodic()
+                // Includes queued work left by an older installation. Never interrupt an active download.
+                val infos = workManager.getWorkInfosForUniqueWork(WORK_ONE_TIME).get()
+                if (infos.any { it.state == WorkInfo.State.ENQUEUED } &&
+                    infos.none { it.state == WorkInfo.State.RUNNING }) syncNow()
             }
         }
     }
 
     val isSyncing: Flow<Boolean> = workManager
         .getWorkInfosForUniqueWorkFlow(WORK_ONE_TIME)
-        .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED } }
+        .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING } }
 
     /** Laufender Sync mit Status-Text und Fortschrittsanteil (null = unbestimmt). */
     val syncStatus: Flow<SyncStatus> = workManager
         .getWorkInfosForUniqueWorkFlow(WORK_ONE_TIME)
-        .map { infos ->
+        .combine(workManager.getWorkInfosForUniqueWorkFlow(WORK_PERIODIC)) { oneTime, periodic ->
+            oneTime + periodic.filter { it.state == WorkInfo.State.RUNNING }
+        }
+        .combine(network.combine(settingsRepo.wifiOnly) { state, unmetered -> state to unmetered }) { infos, (network, unmetered) ->
             val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
             when {
                 running != null -> {
@@ -71,10 +110,27 @@ class SyncManager @Inject constructor(
                     )
                 }
                 infos.any { it.state == WorkInfo.State.ENQUEUED } ->
-                    SyncStatus(running = true, message = "Warte auf Netzwerk …", fraction = null)
+                    SyncStatus(message = pendingSyncMessage(network, unmetered,
+                        infos.any { it.state == WorkInfo.State.ENQUEUED && it.runAttemptCount > 0 }))
+                infos.any { it.state == WorkInfo.State.FAILED } ->
+                    SyncStatus(message = infos.first { it.state == WorkInfo.State.FAILED }.outputData.getString(SyncWorker.KEY_MESSAGE) ?: "Synchronisierung fehlgeschlagen")
                 else -> SyncStatus()
             }
+        }.combine(failureStore.message) { status, failure ->
+            if (!status.running && failure != null) {
+                status.copy(message = listOfNotNull(status.message?.takeUnless { it == failure }, failure).joinToString("\n"))
+            } else status
+        }.combine(backgroundError) { status, error ->
+            if (!status.running && status.message == null && error != null) status.copy(message = error) else status
         }
+
+    /**
+     * Nur die Lesefortschritte abgleichen – schnell und ohne Downloads.
+     * Wird beim App-Start bzw. bei Rückkehr in den Vordergrund aufgerufen.
+     */
+    fun syncProgressNow() {
+        scope.launch { reportSync { bookRepository.syncAllProgress() } }
+    }
 
     /** Sofortige, einmalige Synchronisierung. */
     suspend fun syncNow() {
@@ -83,7 +139,12 @@ class SyncManager @Inject constructor(
             .setConstraints(constraints(wifiOnly))
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
-        workManager.enqueueUniqueWork(WORK_ONE_TIME, ExistingWorkPolicy.KEEP, request)
+        withContext(Dispatchers.IO) {
+            val infos = workManager.getWorkInfosForUniqueWork(WORK_ONE_TIME).get()
+            if (infos.none { it.state == WorkInfo.State.RUNNING }) {
+                workManager.enqueueUniqueWork(WORK_ONE_TIME, ExistingWorkPolicy.REPLACE, request)
+            }
+        }
     }
 
     /** Regelmäßiger Abgleich (alle 6 Stunden). */

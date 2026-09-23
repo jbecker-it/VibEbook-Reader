@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.CircularProgressIndicator
@@ -45,12 +47,18 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,6 +89,19 @@ fun LibraryScreen(
     val browse by viewModel.browseContent.collectAsStateWithLifecycle()
     val reading by viewModel.readingBooks.collectAsStateWithLifecycle()
     val favorites by viewModel.favoriteBooks.collectAsStateWithLifecycle()
+    val actionError by viewModel.actionError.collectAsStateWithLifecycle()
+    var removal by remember { mutableStateOf<Book?>(null) }
+    removal?.let { selected ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { removal = null },
+            title = { Text("Lokale Buchdateien löschen?") },
+            text = { Text("„${selected.title}“ ist nicht mehr auf Nextcloud vorhanden. Die lokale Kopie wird gelöscht. Der Lesefortschritt bleibt erhalten. Nextcloud wird nicht verändert.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { viewModel.removeMissingBook(selected.id); removal = null }) { Text("Lokal löschen") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { removal = null }) { Text("Behalten") } },
+        )
+    }
 
     // Zurück-Geste: erst Ordner hoch, dann normal.
     BackHandler(enabled = tab == LibraryTab.BROWSE && currentFolder.isNotEmpty()) {
@@ -119,12 +140,15 @@ fun LibraryScreen(
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
             if (syncStatus.running) SyncBanner(syncStatus)
+            else syncStatus.message?.let { Text(it, modifier = Modifier.padding(16.dp)) }
+            actionError?.let { Text(it, modifier = Modifier.padding(16.dp)) }
+            if (!isConfigured && books.isNotEmpty()) Text("Offline-Bibliothek · Nextcloud in den Einstellungen verbinden", modifier = Modifier.padding(16.dp))
 
             when {
-                !isConfigured -> EmptyState(
+                !isConfigured && books.isEmpty() -> EmptyState(
                     icon = { Icon(Icons.Outlined.CloudOff, null) },
-                    title = "Noch kein NAS verbunden",
-                    message = "Hinterlege in den Einstellungen deine SMB-Zugangsdaten, um deine Bibliothek zu laden.",
+                    title = "Noch kein Nextcloud verbunden",
+                    message = "Hinterlege in den Einstellungen deine Nextcloud-Zugangsdaten, um deine Bibliothek zu laden.",
                     actionLabel = "Zu den Einstellungen",
                     onAction = onOpenSettings,
                 )
@@ -132,13 +156,19 @@ fun LibraryScreen(
                 books.isEmpty() -> EmptyState(
                     icon = { Icon(Icons.Outlined.MenuBook, null) },
                     title = "Bibliothek ist leer",
-                    message = if (syncStatus.running) "Suche Bücher auf dem NAS …"
-                    else "Tippe auf Synchronisieren, um Bücher vom NAS zu laden.",
+                    message = if (syncStatus.running) "Suche Bücher auf dem Nextcloud …"
+                    else "Tippe auf Synchronisieren, um Bücher vom Nextcloud zu laden.",
                     actionLabel = if (syncStatus.running) null else "Jetzt synchronisieren",
                     onAction = { viewModel.syncNow() },
                 )
 
                 else -> {
+                    reading.firstOrNull { it.downloaded }?.let { latest ->
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = { onBookSelected(latest.id) },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        ) { Text("Weiterlesen: ${latest.title}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
                     TabRow(selectedTabIndex = tab.ordinal) {
                         LibraryTab.entries.forEach { t ->
                             Tab(
@@ -159,6 +189,8 @@ fun LibraryScreen(
                                 else viewModel.downloadBook(book.id)
                             },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onSetFinished = viewModel::setFinished,
+                            onRemove = { removal = it },
                         )
 
                         LibraryTab.READING -> BookGrid(
@@ -166,6 +198,8 @@ fun LibraryScreen(
                             emptyMessage = "Du liest gerade nichts. Such dir im Bibliothek-Tab etwas Schönes aus!",
                             onBookClick = { onBookSelected(it.id) },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onSetFinished = viewModel::setFinished,
+                            onRemove = { removal = it },
                         )
 
                         LibraryTab.FAVORITES -> BookGrid(
@@ -176,6 +210,8 @@ fun LibraryScreen(
                                 else viewModel.downloadBook(book.id)
                             },
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onSetFinished = viewModel::setFinished,
+                            onRemove = { removal = it },
                         )
                     }
                 }
@@ -216,6 +252,8 @@ private fun BrowseGrid(
     onNavigateUp: () -> Unit,
     onBookClick: (Book) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onSetFinished: (String, Boolean) -> Unit,
+    onRemove: (Book) -> Unit,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 156.dp),
@@ -255,6 +293,8 @@ private fun BrowseGrid(
                 book = book,
                 onClick = { onBookClick(book) },
                 onToggleFavorite = { onToggleFavorite(book.id) },
+                onToggleFinished = { onSetFinished(book.id, !book.isFinished) },
+                onRemove = { onRemove(book) },
             )
         }
     }
@@ -266,6 +306,8 @@ private fun BookGrid(
     emptyMessage: String,
     onBookClick: (Book) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onSetFinished: (String, Boolean) -> Unit,
+    onRemove: (Book) -> Unit,
 ) {
     if (books.isEmpty()) {
         EmptyState(
@@ -289,6 +331,8 @@ private fun BookGrid(
                 book = book,
                 onClick = { onBookClick(book) },
                 onToggleFavorite = { onToggleFavorite(book.id) },
+                onToggleFinished = { onSetFinished(book.id, !book.isFinished) },
+                onRemove = { onRemove(book) },
             )
         }
     }
@@ -333,6 +377,8 @@ private fun BookCard(
     book: Book,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onToggleFinished: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -384,7 +430,7 @@ private fun BookCard(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(6.dp)
-                    .size(32.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.35f))
                     .clickable(onClick = onToggleFavorite),
@@ -399,33 +445,37 @@ private fun BookCard(
             }
 
             val fraction = book.readFraction
-            when {
-                book.isFinished -> {
-                    // Fertig-Haken unten rechts
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = "Fertig gelesen",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(6.dp)
-                            .size(26.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.35f)),
-                    )
-                }
+            if (!book.isFinished && fraction > 0.005f && book.downloaded) {
+                // Fortschrittsbalken am unteren Cover-Rand
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    trackColor = Color.Black.copy(alpha = 0.35f),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(5.dp),
+                )
+            }
 
-                fraction > 0.005f && book.downloaded -> {
-                    // Fortschrittsbalken am unteren Cover-Rand
-                    LinearProgressIndicator(
-                        progress = { fraction },
-                        trackColor = Color.Black.copy(alpha = 0.35f),
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .height(5.dp),
-                    )
-                }
+            // Gelesen-Schalter direkt auf dem Cover, passend zum Favoriten-Herz.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .toggleable(value = book.isFinished, role = Role.Checkbox,
+                        onValueChange = { onToggleFinished() })
+                    .semantics { stateDescription = if (book.isFinished) "Gelesen" else "Ungelesen" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (book.isFinished) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                    contentDescription = if (book.isFinished) "Als ungelesen markieren" else "Als gelesen markieren",
+                    tint = if (book.isFinished) MaterialTheme.colorScheme.primary else Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
             }
         }
 
@@ -444,6 +494,10 @@ private fun BookCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (book.missingRemotely) {
+            Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)
+            androidx.compose.material3.OutlinedButton(onClick = onRemove) { Text("Lokale Kopie entfernen") }
         }
     }
 }

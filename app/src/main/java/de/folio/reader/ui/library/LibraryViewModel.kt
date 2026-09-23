@@ -26,7 +26,7 @@ enum class LibraryTab(val label: String) {
     FAVORITES("Favoriten"),
 }
 
-/** Ein Unterordner im Bibliotheks-Browser (spiegelt die SMB-Ordnerstruktur). */
+/** Ein Unterordner im Bibliotheks-Browser (spiegelt die Nextcloud-Ordnerstruktur). */
 data class FolderItem(val path: String, val name: String, val bookCount: Int)
 
 data class BrowseContent(
@@ -47,7 +47,7 @@ class LibraryViewModel @Inject constructor(
     val syncStatus: StateFlow<SyncStatus> = syncManager.syncStatus
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SyncStatus())
 
-    val isConfigured: StateFlow<Boolean> = settingsRepository.smbSettings
+    val isConfigured: StateFlow<Boolean> = settingsRepository.nextcloudSettings
         .map { it.isConfigured }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
@@ -96,7 +96,22 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun downloadBook(id: String) {
-        viewModelScope.launch { runCatching { bookRepository.downloadBook(id) } }
+        runLibraryAction { bookRepository.downloadBook(id) }
+    }
+
+    private val _actionError = MutableStateFlow<String?>(null)
+    val actionError = _actionError.asStateFlow()
+
+    fun removeMissingBook(id: String) = runLibraryAction { bookRepository.removeMissingBook(id) }
+
+    fun setFinished(id: String, finished: Boolean) = runLibraryAction { bookRepository.setFinished(id, finished) }
+
+    private fun runLibraryAction(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try { block(); _actionError.value = null }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { _actionError.value = e.message ?: "Aktion fehlgeschlagen" }
+        }
     }
 
     fun toggleFavorite(id: String) {

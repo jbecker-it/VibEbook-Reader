@@ -5,9 +5,11 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import de.folio.reader.data.repository.BookRepository
 import de.folio.reader.data.settings.SettingsRepository
+import de.folio.reader.di.ApplicationScope
 import de.folio.reader.domain.model.Book
 import de.folio.reader.domain.model.PageLayoutMode
 import de.folio.reader.domain.model.ReadingProgress
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 data class ReaderUiState(
@@ -31,13 +34,21 @@ data class ReaderUiState(
     val chapterFraction: Float = 0f,
     val favorite: Boolean = false,
     val loading: Boolean = true,
+    val layouts: Map<String, Boolean> = emptyMap(),
+    val layoutMode: de.folio.reader.domain.model.BookLayoutMode = de.folio.reader.domain.model.BookLayoutMode.AUTO,
 )
 
 @HiltViewModel
 class ReaderViewModel @Inject constructor(
     private val bookRepository: BookRepository,
     private val settingsRepository: SettingsRepository,
+    @ApplicationScope private val appScope: CoroutineScope,
 ) : ViewModel() {
+    val readerPreferences = settingsRepository.readerPreferences
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), de.folio.reader.domain.model.ReaderPreferences())
+    fun setReaderPreferences(value: de.folio.reader.domain.model.ReaderPreferences) {
+        viewModelScope.launch { settingsRepository.saveReaderPreferences(value) }
+    }
 
     private val _state = MutableStateFlow(ReaderUiState())
     val state: StateFlow<ReaderUiState> = _state.asStateFlow()
@@ -60,8 +71,12 @@ class ReaderViewModel @Inject constructor(
         loadedId = bookId
         _state.value = ReaderUiState(loading = true)
         viewModelScope.launch {
-            // Vor dem Öffnen einmal mit dem NAS abgleichen, um den neuesten Stand zu holen.
-            runCatching { bookRepository.syncProgress(bookId) }
+            // Vor dem Öffnen einmal mit dem Nextcloud abgleichen, um den neuesten Stand
+            // zu holen – aber begrenzt, damit ein nicht erreichbares Nextcloud das
+            // Öffnen nicht blockiert.
+            runCatching {
+                withTimeoutOrNull(5_000) { bookRepository.syncProgress(bookId) }
+            }
             val book = bookRepository.observeBook(bookId).first()
             val saved = book?.progress
             val maxIndex = ((book?.spine?.size ?: 1) - 1).coerceAtLeast(0)
@@ -75,6 +90,8 @@ class ReaderViewModel @Inject constructor(
                 chapterFraction = restore,
                 favorite = book?.favorite ?: false,
                 loading = false,
+                layouts = book?.let { bookRepository.readLayouts(it) } ?: emptyMap(),
+                layoutMode = settingsRepository.bookLayout(bookId).first(),
             )
             lastScrollFraction = restore
             lastCharOffset = anchor
@@ -105,20 +122,39 @@ class ReaderViewModel @Inject constructor(
         scheduleSave()
     }
 
-    fun nextChapter() = goToChapter(_state.value.spineIndex + 1, restoreFraction = 0f)
+    fun nextChapter() {
+        val s = _state.value
+        if (s.spineIndex < (s.book?.spine?.lastIndex ?: 0)) goToChapter(s.spineIndex + 1, 0f)
+    }
 
     /** Rückwärts über die Kapitelgrenze: ans Ende des vorherigen Kapitels springen. */
-    fun previousChapter() = goToChapter(_state.value.spineIndex - 1, restoreFraction = 1f)
+    fun previousChapter() {
+        if (_state.value.spineIndex > 0) goToChapter(_state.value.spineIndex - 1, 1f)
+    }
 
     /**
      * Vom WebView gemeldete Position: Anteil im Kapitel plus wortgenauer
-     * Zeichen-Anker der aktuellen Seite.
+     * Zeichen-Anker der aktuellen Seite. Die Restore-Felder werden mitgeführt,
+     * damit ein neu erzeugtes WebView (z.B. beim Auf-/Zuklappen eines
+     * Foldables) an der aktuellen Seite weitermacht – nicht am Kapitelanfang.
      */
     fun onPosition(fraction: Float, charOffset: Int) {
         lastScrollFraction = fraction
         lastCharOffset = charOffset
-        _state.update { it.copy(chapterFraction = fraction) }
+        _state.update {
+            it.copy(
+                chapterFraction = fraction,
+                restoreScrollFraction = fraction,
+                restoreCharOffset = charOffset,
+            )
+        }
         scheduleSave()
+    }
+
+    fun setLayoutMode(mode: de.folio.reader.domain.model.BookLayoutMode) {
+        val id = loadedId ?: return
+        _state.update { it.copy(layoutMode = mode) }
+        viewModelScope.launch { settingsRepository.setBookLayout(id, mode) }
     }
 
     fun toggleFavorite() {
@@ -127,10 +163,15 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { bookRepository.toggleFavorite(book.id) }
     }
 
-    /** Sofort speichern – vom Reader-Screen beim Verlassen aufgerufen. */
+    /**
+     * Sofort speichern – beim Verlassen des Readers und bei ON_STOP (App in
+     * den Hintergrund, Display gewechselt). Läuft im App-Scope, damit der
+     * Schreibvorgang das Aufräumen des ViewModels überlebt – sonst geht die
+     * Position beim schnellen Schließen verloren.
+     */
     fun saveNow() {
         saveJob?.cancel()
-        viewModelScope.launch { persist() }
+        persist()
     }
 
     private fun scheduleSave() {
@@ -141,21 +182,27 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    private suspend fun persist() {
+    private fun persist() {
         val s = _state.value
         val book = s.book ?: return
         if (book.spine.isEmpty()) return
-        val finished = s.spineIndex >= book.spine.lastIndex && lastScrollFraction > 0.98f
-        bookRepository.saveProgress(
-            ReadingProgress(
-                bookId = book.id,
-                spineIndex = s.spineIndex,
-                scrollFraction = lastScrollFraction,
-                charOffset = lastCharOffset,
-                updatedAt = System.currentTimeMillis(),
-                deviceId = settingsRepository.deviceId(),
-                finished = finished,
+        // Werte jetzt festhalten – der Schreibvorgang läuft asynchron weiter.
+        val fraction = lastScrollFraction
+        val anchor = lastCharOffset
+        val finished = s.spineIndex >= book.spine.lastIndex && fraction > 0.98f
+        val capturedAt = System.currentTimeMillis()
+        appScope.launch {
+            bookRepository.saveProgress(
+                ReadingProgress(
+                    bookId = book.id,
+                    spineIndex = s.spineIndex,
+                    scrollFraction = fraction,
+                    charOffset = anchor,
+                    updatedAt = capturedAt,
+                    deviceId = settingsRepository.deviceId(),
+                    finished = finished,
+                )
             )
-        )
+        }
     }
 }

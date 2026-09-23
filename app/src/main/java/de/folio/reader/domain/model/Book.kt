@@ -1,13 +1,13 @@
 package de.folio.reader.domain.model
 
 /**
- * Ein Buch in der Bibliothek. [id] ist deterministisch aus dem relativen NAS-Pfad
+ * Ein Buch in der Bibliothek. [id] ist deterministisch aus dem relativen Nextcloud-Pfad
  * abgeleitet, damit derselbe Titel auf jedem Gerät dieselbe ID (und damit dieselbe
  * Fortschrittsdatei) erhält.
  */
 data class Book(
     val id: String,
-    /** Pfad relativ zum konfigurierten NAS-Wurzelordner, z. B. "SciFi/Dune.epub". */
+    /** Pfad relativ zum konfigurierten Nextcloud-Wurzelordner, z. B. "SciFi/Dune.epub". */
     val relativePath: String,
     val title: String,
     val author: String,
@@ -20,6 +20,7 @@ data class Book(
     val sizeBytes: Long,
     val progress: ReadingProgress?,
     val favorite: Boolean = false,
+    val missingRemotely: Boolean = false,
 )
 
 /** Gesamtfortschritt 0..1 über alle Kapitel. */
@@ -32,7 +33,8 @@ val Book.readFraction: Float
 
 /** Fertig gelesen (Flag aus dem Fortschritt oder praktisch am Ende). */
 val Book.isFinished: Boolean
-    get() = progress?.finished == true || readFraction >= 0.98f
+    get() = if ((progress?.finishedUpdatedAt ?: 0L) > 0L) progress?.finished == true
+        else progress?.finished == true || readFraction >= 0.98f
 
 /** Bereits angefangen (für den Tab „Lese ich"). */
 val Book.isStarted: Boolean

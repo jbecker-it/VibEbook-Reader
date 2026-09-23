@@ -7,10 +7,10 @@ import org.json.JSONObject
  * und Favorit.
  *
  * Wird pro Buch als eigene JSON-Datei gespeichert (lokal in
- * filesDir/progress/<id>.json) und bei nächster Gelegenheit per SMB auf das NAS
+ * filesDir/progress/<id>.json) und bei nächster Gelegenheit per Nextcloud auf das Nextcloud
  * synchronisiert. Der Abgleich erfolgt FELDWEISE per Last-Write-Wins:
- * Leseposition/finished hängen an [updatedAt], der Favorit an
- * [favoriteUpdatedAt]. So überschreibt Weiterlesen auf Gerät B nicht das
+ * Leseposition hängt an [updatedAt], manuelle Lesestatus-Änderungen an
+ * [finishedUpdatedAt], der Favorit an [favoriteUpdatedAt]. So überschreibt Weiterlesen auf Gerät B nicht das
  * Favorisieren auf Gerät A – und umgekehrt.
  */
 data class ReadingProgress(
@@ -33,6 +33,8 @@ data class ReadingProgress(
     val favorite: Boolean = false,
     /** Epoch-Millis der letzten Favoriten-Änderung (eigener Konfliktzeitstempel). */
     val favoriteUpdatedAt: Long = 0L,
+    /** Eigener Zeitstempel für explizites Gelesen/Ungelesen; 0 = automatische Erkennung. */
+    val finishedUpdatedAt: Long = 0L,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("bookId", bookId)
@@ -44,11 +46,12 @@ data class ReadingProgress(
         put("finished", finished)
         put("favorite", favorite)
         put("favoriteUpdatedAt", favoriteUpdatedAt)
+        put("finishedUpdatedAt", finishedUpdatedAt)
         put("schema", SCHEMA_VERSION)
     }.toString()
 
     companion object {
-        const val SCHEMA_VERSION = 3
+        const val SCHEMA_VERSION = 4
 
         fun fromJson(raw: String): ReadingProgress {
             val o = JSONObject(raw)
@@ -62,21 +65,26 @@ data class ReadingProgress(
                 finished = o.optBoolean("finished", false),
                 favorite = o.optBoolean("favorite", false),
                 favoriteUpdatedAt = o.optLong("favoriteUpdatedAt", 0L),
+                finishedUpdatedAt = o.optLong("finishedUpdatedAt", 0L),
             )
         }
 
         /**
          * Feldweiser Merge zweier Stände: Leseposition inkl. [charOffset]
-         * (+finished) vom Stand
-         * mit dem neueren [updatedAt], Favorit vom Stand mit dem neueren
-         * [favoriteUpdatedAt]. Das Ergebnis kann Felder beider Seiten mischen.
+         * vom Stand mit dem neueren [updatedAt], manueller Lesestatus und Favorit
+         * jeweils mit eigenem Zeitstempel. Automatische Erkennung (Zeitstempel 0)
+         * überschreibt keine explizite Entscheidung. Das Ergebnis kann Felder beider Seiten mischen.
          */
         fun merge(a: ReadingProgress?, b: ReadingProgress?): ReadingProgress? {
             if (a == null) return b
             if (b == null) return a
             val readingBase = if (a.updatedAt >= b.updatedAt) a else b
             val favoriteBase = if (a.favoriteUpdatedAt >= b.favoriteUpdatedAt) a else b
+            val finishedBase = if (a.finishedUpdatedAt == 0L && b.finishedUpdatedAt == 0L) readingBase
+                else if (a.finishedUpdatedAt >= b.finishedUpdatedAt) a else b
             return readingBase.copy(
+                finished = finishedBase.finished,
+                finishedUpdatedAt = finishedBase.finishedUpdatedAt,
                 favorite = favoriteBase.favorite,
                 favoriteUpdatedAt = favoriteBase.favoriteUpdatedAt,
             )

@@ -5,9 +5,9 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import de.folio.reader.data.repository.BookRepository
 import de.folio.reader.data.settings.SettingsRepository
-import de.folio.reader.data.smb.SmbClient
+import de.folio.reader.data.nextcloud.NextcloudClient
 import de.folio.reader.domain.model.PageLayoutMode
-import de.folio.reader.domain.model.SmbSettings
+import de.folio.reader.domain.model.NextcloudSettings
 import de.folio.reader.domain.model.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,12 +27,17 @@ sealed interface ConnectionTest {
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
-    private val smbClient: SmbClient,
+    private val nextcloudClient: NextcloudClient,
     private val bookRepository: BookRepository,
 ) : ViewModel() {
+    val readerPreferences = settingsRepository.readerPreferences
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), de.folio.reader.domain.model.ReaderPreferences())
+    fun setReaderPreferences(value: de.folio.reader.domain.model.ReaderPreferences) {
+        viewModelScope.launch { settingsRepository.saveReaderPreferences(value) }
+    }
 
-    val smbSettings: StateFlow<SmbSettings> = settingsRepository.smbSettings
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SmbSettings())
+    val nextcloudSettings: StateFlow<NextcloudSettings> = settingsRepository.nextcloudSettings
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NextcloudSettings())
 
     val themeMode: StateFlow<ThemeMode> = settingsRepository.themeMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeMode.AMOLED)
@@ -49,8 +54,14 @@ class SettingsViewModel @Inject constructor(
     private val _connectionTest = MutableStateFlow<ConnectionTest>(ConnectionTest.Idle)
     val connectionTest: StateFlow<ConnectionTest> = _connectionTest.asStateFlow()
 
-    fun saveSmb(settings: SmbSettings) {
-        viewModelScope.launch { settingsRepository.saveSmbSettings(settings) }
+    fun saveNextcloud(settings: NextcloudSettings, onSaved: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                settingsRepository.saveNextcloudSettings(settings)
+                onSaved()
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) { _connectionTest.value = ConnectionTest.Failure(e.message ?: "Speichern fehlgeschlagen") }
+        }
     }
 
     fun setTheme(mode: ThemeMode) {
@@ -69,11 +80,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setEInkMode(value) }
     }
 
-    fun testConnection(settings: SmbSettings) {
+    fun testConnection(settings: NextcloudSettings) {
         viewModelScope.launch {
             _connectionTest.value = ConnectionTest.Testing
-            settingsRepository.saveSmbSettings(settings)
-            smbClient.testConnection(settings)
+            nextcloudClient.testConnection(settings)
                 .onSuccess { _connectionTest.value = ConnectionTest.Success }
                 .onFailure { _connectionTest.value = ConnectionTest.Failure(it.message ?: "Unbekannter Fehler") }
         }
