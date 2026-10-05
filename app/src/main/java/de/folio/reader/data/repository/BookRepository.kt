@@ -92,7 +92,7 @@ class BookRepository @Inject constructor(
                 relativePath = rel, remoteId = entry.remoteId, aliasesJson = JSONArray(aliases.toList()).toString(), listedEtag = entry.etag, missingRemotely = false,
             )
             if (existing != null && existing.id != id) progressRepo.read(existing.id)?.let { progressRepo.write(it.copy(bookId = id)) }
-            bookDao.upsert(entity.copy(id = id))
+            bookDao.upsertMetadata(entity.copy(id = id))
             if (existing != null && existing.id != id) bookDao.delete(existing.id)
             val changed = !entity.downloaded || entity.spineJson.toStringList().firstOrNull()?.let { !File(it).isFile } == true || (entry.etag.isNotBlank() && entity.remoteEtag != entry.etag) || entity.sizeBytes != entry.size
             if (entity.keepOffline && changed) downloadIds += id
@@ -291,7 +291,7 @@ class BookRepository @Inject constructor(
         } catch (e: Exception) { bookDir.deleteRecursively(); throw e
         } finally { tmp.delete() }
         val existing = bookDao.getById(id)
-        try { bookDao.upsert(
+        try { bookDao.upsertMetadata(
             BookEntity(
                 id = id,
                 relativePath = libraryRel,

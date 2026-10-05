@@ -15,6 +15,22 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [28])
 class DatabaseMigrationTest {
+    @Test fun staleDownloadMetadataPreservesNewerUserActions() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), FolioDatabase::class.java).build()
+        try {
+            val dao = database.bookDao()
+            val original = BookEntity("book", "book.epub", "Old", "", null, "[]", false, 42, 0, addedAt = 10)
+            dao.upsert(original)
+            val downloadSnapshot = dao.getById("book")!!
+            dao.setFavorite("book", true)
+            dao.opened("book", 200)
+            dao.upsertMetadata(downloadSnapshot.copy(title = "New", downloaded = true, spineJson = "[\"new.xhtml\"]", addedAt = 100))
+            val result = dao.getById("book")!!
+            assertTrue(result.favorite); assertEquals(200L, result.lastOpenedAt); assertEquals(10L, result.addedAt)
+            assertEquals("New", result.title); assertTrue(result.downloaded); assertEquals("[\"new.xhtml\"]", result.spineJson)
+        } finally { database.close() }
+    }
+
     @Test fun upgradesEveryExistingVersionWithoutLosingBook() = runBlocking {
         val context: Context = RuntimeEnvironment.getApplication()
         for (version in 1..3) {

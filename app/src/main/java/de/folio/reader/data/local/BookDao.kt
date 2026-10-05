@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Upsert
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -42,6 +43,17 @@ interface BookDao {
 
     @Upsert
     suspend fun upsert(book: BookEntity)
+
+    /** Metadata downloaded earlier must not overwrite intervening user actions. */
+    @Transaction
+    suspend fun upsertMetadata(book: BookEntity) {
+        val current = getById(book.id)
+        upsert(if (current == null) book else book.copy(
+            favorite = current.favorite,
+            lastOpenedAt = current.lastOpenedAt,
+            addedAt = current.addedAt,
+        ))
+    }
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIfAbsent(book: BookEntity)
