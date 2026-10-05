@@ -39,7 +39,7 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val imported by importedBook.collectAsState()
                     val error by importError.collectAsState()
-                    FolioApp(importedBookId = imported, onImportConsumed = { importedBook.value = null })
+                    FolioApp(eInk = eInk, importedBookId = imported, onImportConsumed = { importedBook.value = null })
                     error?.let { androidx.compose.material3.AlertDialog(onDismissRequest = { importError.value = null }, title = { androidx.compose.material3.Text("Import fehlgeschlagen") }, text = { androidx.compose.material3.Text(it) }, confirmButton = { androidx.compose.material3.TextButton(onClick = { importError.value = null }) { androidx.compose.material3.Text("OK") } }) }
                 }
             }

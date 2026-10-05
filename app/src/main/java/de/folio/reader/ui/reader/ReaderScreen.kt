@@ -123,21 +123,22 @@ fun ReaderScreen(
             confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.saveNow(); viewModel.clearError() }) { Text("OK") } })
     }
     if (navigationVisible) {
+        val toc = remember(state.book?.tocJson) { org.json.JSONArray(state.book?.tocJson ?: "[]") }
         androidx.compose.material3.AlertDialog(onDismissRequest = { navigationVisible = false }, title = { Text("Inhalt und Lesezeichen") },
-            text = { Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
-                androidx.compose.material3.TextButton(onClick = viewModel::addBookmark) { Text("Hier ein Lesezeichen setzen") }
-                androidx.compose.material3.TextButton(onClick = viewModel::setFinished) { Text(if (state.book?.progress?.finished == true) "Als ungelesen markieren" else "Als gelesen markieren") }
-                Text("Lesezeichen")
-                state.bookmarks.forEachIndexed { index, p -> Row {
+            text = { androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * .5f).dp)) {
+                item { androidx.compose.material3.TextButton(onClick = viewModel::addBookmark) { Text("Hier ein Lesezeichen setzen") } }
+                item { androidx.compose.material3.TextButton(onClick = viewModel::setFinished) { Text(if (state.book?.progress?.finished == true) "Als ungelesen markieren" else "Als gelesen markieren") } }
+                item { if (state.returnPosition != null) androidx.compose.material3.TextButton(onClick = { viewModel.returnToPosition(); navigationVisible = false }) { Text("Zur vorherigen Lesestelle") } }
+                item { Text("Lesezeichen") }
+                items(state.bookmarks.size) { index -> val p = state.bookmarks[index]; Row {
                     androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text("Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).roundToInt()} %") }
                     androidx.compose.material3.TextButton(onClick = { viewModel.removeBookmark(index) }) { Text("×") }
                 } }
-                Text("Letzte Positionen")
-                state.history.take(10).forEach { p -> androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text("Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).roundToInt()} %") } }
-                Text("Inhaltsverzeichnis")
-                val toc = org.json.JSONArray(state.book?.tocJson ?: "[]")
-                if (toc.length() == 0) state.book?.spine?.forEachIndexed { i, _ -> androidx.compose.material3.TextButton(onClick = { viewModel.goToChapter(i); navigationVisible = false }) { Text("Kapitel ${i + 1}") } }
-                for (i in 0 until toc.length()) { val item = toc.getJSONObject(i)
+                item { Text("Letzte Positionen") }
+                items(minOf(state.history.size, 10)) { index -> val p = state.history[index]; androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text("Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).roundToInt()} %") } }
+                item { Text("Inhaltsverzeichnis") }
+                if (toc.length() == 0) items(state.book?.spine?.size ?: 0) { i -> androidx.compose.material3.TextButton(onClick = { viewModel.goToChapter(i, rememberReturn = true); navigationVisible = false }) { Text("Kapitel ${i + 1}") } }
+                else items(toc.length()) { i -> val item = toc.getJSONObject(i)
                     androidx.compose.material3.TextButton(onClick = { viewModel.openLink(item.getString("path"), item.optString("fragment")); navigationVisible = false }) { Text("  ".repeat(item.optInt("depth").coerceIn(0, 8)) + item.getString("label")) }
                 }
             } }, confirmButton = { androidx.compose.material3.TextButton(onClick = { navigationVisible = false }) { Text("Schließen") } })
@@ -272,7 +273,7 @@ fun ReaderScreen(
                 chapterFraction = state.chapterFraction,
                 onPrev = viewModel::previousChapter,
                 onNext = viewModel::nextChapter,
-                onSeekChapter = { viewModel.goToChapter(it) },
+                onSeekChapter = { viewModel.goToChapter(it, rememberReturn = true) },
             )
         }
     }
@@ -425,7 +426,7 @@ private fun EpubWebView(
         restoreFraction, restoreCharOffset, twoPage, smoothTurns,
         backgroundHex, textHex, linkHex, forceColors,
         preferences,
-        fixedLayout,
+        fixedLayout, fragment,
     )
 
     // Layout-/Themewechsel ohne Neuladen anwenden: erneut injizieren – das
@@ -466,14 +467,13 @@ private fun EpubWebView(
                         val file = if (request.url.scheme == "file") runCatching { File(request.url.path.orEmpty()).canonicalFile }.getOrNull() else null
                         if (root == null || file == null || !file.path.startsWith(root)) return android.webkit.WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
                         if (request.isForMainFrame || file.extension.lowercase() in setOf("html", "xhtml", "htm", "svg")) {
-                            return try { android.webkit.WebResourceResponse(if (file.extension.equals("svg", true) && !request.isForMainFrame) "image/svg+xml" else "text/html", "UTF-8", de.folio.reader.data.epub.EpubSafety.sanitize(file.readText(), file.extension.equals("svg", true)).byteInputStream()) }
+                            return try { require(file.length() <= 16 * 1024 * 1024) { "Kapitel zu groß." }; android.webkit.WebResourceResponse(if (file.extension.equals("svg", true) && !request.isForMainFrame) "image/svg+xml" else "text/html", "UTF-8", de.folio.reader.data.epub.EpubSafety.sanitize(file.readText(), file.extension.equals("svg", true)).byteInputStream()) }
                             catch (_: Exception) { android.webkit.WebResourceResponse("text/plain", "UTF-8", "Kapitel konnte nicht geladen werden.".byteInputStream()) }
                         }
                         return null
                     }
                     override fun onPageFinished(view: WebView, url: String?) {
                         view.evaluateJavascript(injection[0], null)
-                        if (fragment.isNotBlank()) view.evaluateJavascript("(function(){var F=window.__folio,t=document.getElementById(" + jsString(fragment) + ");if(F&&t&&!F.fixed){var r=document.createRange();r.selectNodeContents(t);F.setScreen(F.pageOfRange(r),false,true);}})();", null)
                     }
                 }
                 webViewRef[0] = this
@@ -569,6 +569,7 @@ internal fun buildInjection(
     forceColors: Boolean,
     preferences: ReaderPreferences,
     fixedLayout: Boolean? = null,
+    restoreFragment: String = "",
 ): String {
     val frac = restoreFraction.coerceIn(0f, 1f).toString()
     val colorRules = if (forceColors) {
@@ -595,6 +596,7 @@ internal fun buildInjection(
         F.declaredFixed = ${fixedLayout?.toString() ?: "null"};
         if (firstRun) {
             F.fraction = $frac;          // Kapitel-Anteil 0..1 (Fallback)
+            F.fragment = ${jsString(restoreFragment)};
             F.anchor = $restoreCharOffset; // Zeichen-Offset, -1 = keiner
             F.screen = 0;
             F.screens = 1;
@@ -749,6 +751,21 @@ internal fun buildInjection(
             F.panY += dy * window.innerHeight * 0.75;
             F.layout();
         };
+        F.panel = function(direction) {
+            var scale = Math.min(window.innerWidth / F.pageWidth, window.innerHeight / F.pageHeight) * F.zoom;
+            var maxX = Math.max(0, F.pageWidth * scale - window.innerWidth);
+            var maxY = Math.max(0, F.pageHeight * scale - window.innerHeight);
+            if (direction > 0) {
+                if (F.panX < maxX - 1) F.panX = Math.min(maxX, F.panX + window.innerWidth * .75);
+                else if (F.panY < maxY - 1) { F.panX = 0; F.panY = Math.min(maxY, F.panY + window.innerHeight * .75); }
+                else { F.next(); return; }
+            } else {
+                if (F.panX > 1) F.panX = Math.max(0, F.panX - window.innerWidth * .75);
+                else if (F.panY > 1) { F.panX = maxX; F.panY = Math.max(0, F.panY - window.innerHeight * .75); }
+                else { F.prev(); return; }
+            }
+            F.layout();
+        };
         F.zoomControls = function() {
             var controls = document.getElementById('folio-zoom');
             var focused = controls && controls.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
@@ -775,6 +792,8 @@ internal fun buildInjection(
                     button('↑', 'Ausschnitt nach oben', function() { F.pan(0, -1); });
                     button('↓', 'Ausschnitt nach unten', function() { F.pan(0, 1); });
                     button('→', 'Ausschnitt nach rechts', function() { F.pan(1, 0); });
+                    button('‹', 'Vorheriger Ausschnitt', function() { F.panel(-1); });
+                    button('›', 'Nächster Ausschnitt', function() { F.panel(1); });
                 }
             }
             // Sibling of body: never part of the publisher's transformed canvas or text index.
@@ -851,6 +870,10 @@ internal fun buildInjection(
             if (F.anchor >= 0 && F.textLen > 0) target = F.pageOfOffset(F.anchor);
             if (target < 0) {
                 target = F.screens <= 1 ? 0 : Math.round(F.fraction * (F.screens - 1));
+            }
+            if (F.fragment) {
+                var element = document.getElementById(F.fragment);
+                if (element) { var range = document.createRange(); range.selectNodeContents(element); var page = F.pageOfRange(range); if (page >= 0) { F.fragment = null; F.setScreen(page, false, true); return; } }
             }
             F.setScreen(target, false, false);
         };
@@ -956,8 +979,7 @@ internal fun buildInjection(
 }
 
 /** Kapselt einen String sicher als JS-Literal. */
-private fun jsString(s: String): String =
-    "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+private fun jsString(s: String): String = org.json.JSONObject.quote(s)
 
 // ---------------------------------------------------------------------------
 // Systemleisten im Lesemodus ausblenden

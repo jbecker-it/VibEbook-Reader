@@ -104,9 +104,10 @@ data class ReadingProgress(
             if (a == null) return b
             if (b == null) return a
             require(a.bookId == b.bookId) { "Lesestände gehören zu verschiedenen Büchern." }
-            val readingBase = maxOf(a, b, compareBy<ReadingProgress>({ it.updatedAt }, { it.positionRevision }, { it.deviceId }, { it.spineIndex }, { it.scrollFraction }, { it.charOffset }, { it.contentRevision }, { it.chapterPath }))
+            val readingOrder = compareBy<ReadingProgress>({ it.updatedAt }, { it.positionRevision }, { it.deviceId }, { it.spineIndex }, { it.scrollFraction }, { it.charOffset }, { it.contentRevision }, { it.chapterPath })
+            val readingBase = maxOf(a, b, readingOrder)
             val favoriteBase = maxOf(a, b, compareBy<ReadingProgress>({ it.favoriteUpdatedAt }, { it.favoriteRevision }, { it.favoriteDeviceId }, { it.favorite }))
-            val finishedBase = if (a.finishedUpdatedAt == 0L && b.finishedUpdatedAt == 0L) readingBase
+            val finishedBase = if (a.finishedUpdatedAt == 0L && b.finishedUpdatedAt == 0L) maxOf(a, b, readingOrder.thenBy { it.finishedRevision }.thenBy { it.finishedDeviceId }.thenBy { it.finished })
                 else maxOf(a, b, compareBy<ReadingProgress>({ it.finishedUpdatedAt }, { it.finishedRevision }, { it.finishedDeviceId }, { it.finished }))
             return readingBase.copy(
                 finished = finishedBase.finished,

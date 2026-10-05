@@ -47,6 +47,8 @@ class LibraryViewModel @Inject constructor(
     fun consumedOpenedBook() { _openedBook.value = null }
     private val _query = MutableStateFlow(""); val query = _query.asStateFlow()
     private val _sort = MutableStateFlow("Titel"); val sort = _sort.asStateFlow()
+    private val _readFilter = MutableStateFlow("Alle"); val readFilter = _readFilter.asStateFlow()
+    fun cycleReadFilter() { _readFilter.value = when (_readFilter.value) { "Alle" -> "Ungelesen"; "Ungelesen" -> "Gelesen"; else -> "Alle" } }
     private val _offlineOnly = MutableStateFlow(false); val offlineOnly = _offlineOnly.asStateFlow()
     fun search(value: String) { _query.value = value }
     fun cycleSort() { _sort.value = when (_sort.value) { "Titel" -> "Zuletzt gelesen"; "Zuletzt gelesen" -> "Zuletzt hinzugefügt"; else -> "Titel" } }
@@ -61,8 +63,8 @@ class LibraryViewModel @Inject constructor(
     val books: StateFlow<List<Book>> = bookRepository.observeBooks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val filteredBooks = combine(books, _query, _offlineOnly, _sort) { all, q, offline, order ->
-        sorted(all.filter { (!offline || it.downloaded) && (q.isBlank() || (it.title + " " + it.author + " " + it.relativePath).contains(q, true)) }, order)
+    val filteredBooks = combine(books, _query, _offlineOnly, _sort, _readFilter) { all, q, offline, order, read ->
+        sorted(all.filter { (!offline || it.downloaded) && (read == "Alle" || (read == "Gelesen") == it.isFinished) && (q.isBlank() || (it.title + " " + it.author + " " + it.relativePath).contains(q, true)) }, order)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val syncStatus: StateFlow<SyncStatus> = syncManager.syncStatus

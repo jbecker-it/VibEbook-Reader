@@ -19,7 +19,7 @@ data class NextcloudSettings(
         require(url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null) {
             "Serveradresse ohne Zugangsdaten, Abfrage oder Fragment eingeben."
         }
-        require(username.isNotBlank() && ':' !in username && '/' !in username) { "Nextcloud-Benutzernamen eingeben." }
+        require(username.isNotBlank() && ':' !in username && '/' !in username && !username.any(Char::isISOControl)) { "Nextcloud-Benutzernamen eingeben." }
         require(davUser.isEmpty() || (davUser.isNotBlank() && '/' !in davUser && '\\' !in davUser && !davUser.any(Char::isISOControl))) { "Ungültige Nextcloud-Benutzer-ID." }
         require(password.isNotBlank()) { "Ein Nextcloud-App-Passwort ist erforderlich." }
         segments(rootPath)

@@ -17,14 +17,14 @@ object EpubToc {
         try {
             if (nav != null) {
                 val file = EpubSafety.resolve(root, opfDir, nav)
-                val document = Jsoup.parse(file, "UTF-8")
+                require(file.length() <= 4 * 1024 * 1024); val document = Jsoup.parse(file, "UTF-8")
                 val toc = document.select("nav").firstOrNull { it.attr("epub:type").split(' ').contains("toc") || it.attr("role") == "doc-toc" }
                     ?: document.selectFirst("nav")
                 toc?.select("a[href]")?.forEach { a -> add(file, a.attr("href"), a.text(), a.parents().count { it.tagName() == "ol" }.minus(1).coerceAtLeast(0)) }
             }
             if (result.length() == 0 && ncx != null) {
                 val file = EpubSafety.resolve(root, opfDir, ncx)
-                val document = Jsoup.parse(file.readText(), "", Parser.xmlParser())
+                require(file.length() <= 4 * 1024 * 1024); val document = Jsoup.parse(file.readText(), "", Parser.xmlParser())
                 document.select("navPoint").forEach { point ->
                     val label = point.children().firstOrNull { it.tagName().equals("navLabel", true) }?.text().orEmpty()
                     val href = point.children().firstOrNull { it.tagName().equals("content", true) }?.attr("src").orEmpty()

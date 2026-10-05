@@ -144,4 +144,41 @@ class NextcloudHttpTest {
         catch (e: DavException) { assertEquals(302, e.status) }
         assertEquals(1, server.requestCount)
     }
+    @Test fun connectionTestVerifiesWritesReadsAndRemovesOnlyItsProbe() = runBlocking {
+        val root = settings.davUrl().encodedPath
+        server.enqueue(MockResponse().setResponseCode(207).setBody("""<d:multistatus xmlns:d="DAV:"><d:response><d:href>$root/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"""))
+        server.enqueue(MockResponse().setResponseCode(201)); server.enqueue(MockResponse().setResponseCode(201))
+        server.enqueue(MockResponse().setBody("{\"folioProbe\":true}")); server.enqueue(MockResponse().setResponseCode(204))
+        assertTrue(client.testConnection(settings).isSuccess)
+        assertEquals("PROPFIND", server.takeRequest().method); assertEquals("MKCOL", server.takeRequest().method)
+        val put = server.takeRequest(); assertEquals("*", put.getHeader("If-None-Match")); assertTrue(put.path!!.contains(".folio-probe-"))
+        assertEquals(put.path, server.takeRequest().path); val delete = server.takeRequest(); assertEquals("DELETE", delete.method); assertEquals(put.path, delete.path)
+    }
+    @Test fun registryKeepsIdentityAfterRename() = runBlocking {
+        val id = "0123456789abcdef0123456789abcdef"
+        server.enqueue(MockResponse().setBody("{\"schema\":1,\"books\":{\"42\":\"$id\"}}").addHeader("ETag", "\"catalog\""))
+        assertEquals(id, client.bookRegistry(settings, mapOf("42" to "ffffffffffffffffffffffffffffffff"))["42"])
+        assertEquals(1, server.requestCount)
+    }
+    @Test fun timeoutCancelsAnAlreadyReceivedBody() = runBlocking {
+        server.enqueue(MockResponse().setBody("x".repeat(1024)).throttleBody(1, 250, java.util.concurrent.TimeUnit.MILLISECONDS))
+        val started = System.nanoTime()
+        try { kotlinx.coroutines.withTimeout(200) { client.readTextOrNull(settings, "slow.json") }; fail("Timeout expected") }
+        catch (_: kotlinx.coroutines.CancellationException) { }
+        assertTrue("Body read exceeded cancellation bound", (System.nanoTime() - started) / 1000000 < 2000)
+    }
+    @Test fun loginFlowUsesBrowserTokenAndCanonicalDavUser() = runBlocking {
+        val base = server.url("/").toString().trimEnd('/')
+        server.enqueue(MockResponse().setBody("{\"login\":\"$base/login/v2/flow/abc\",\"poll\":{\"endpoint\":\"$base/login/v2/poll\",\"token\":\"secret-token\"}}"))
+        val session = client.startLogin(base); assertFalse(session.toString().contains("secret-token"))
+        assertNull(server.takeRequest().getHeader("Authorization"))
+        server.enqueue(MockResponse().setResponseCode(404)); assertNull(client.pollLogin(session)); server.takeRequest()
+        server.enqueue(MockResponse().setBody("{\"server\":\"$base\",\"loginName\":\"reader@example.com\",\"appPassword\":\"app-password\"}"))
+        server.enqueue(MockResponse().setBody("{\"ocs\":{\"meta\":{\"statuscode\":200},\"data\":{\"id\":\"actual-reader\"}}}"))
+        val account = client.pollLogin(session)!!
+        assertEquals("reader@example.com", account.username); assertTrue(account.davUrl().encodedPath.contains("actual-reader"))
+        val poll = server.takeRequest(); assertEquals("token=secret-token", poll.body.readUtf8()); assertNull(poll.getHeader("Authorization"))
+        assertNotNull(server.takeRequest().getHeader("Authorization"))
+        try { client.sameServer(server.url("/"), "https://foreign.example/poll"); fail("Foreign origin expected") } catch (_: IllegalArgumentException) { }
+    }
 }

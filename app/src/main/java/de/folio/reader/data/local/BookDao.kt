@@ -19,6 +19,9 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE id = :id")
     suspend fun getById(id: String): BookEntity?
 
+    @Query("UPDATE books SET tocJson = :toc WHERE id = :id AND spineJson = :expectedSpine")
+    suspend fun updateToc(id: String, toc: String, expectedSpine: String)
+
     @Query("SELECT * FROM books WHERE remoteId = :remoteId AND remoteId != '' LIMIT 1")
     suspend fun getByRemoteId(remoteId: String): BookEntity?
 

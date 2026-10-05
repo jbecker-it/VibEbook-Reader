@@ -94,7 +94,7 @@ class BookRepository @Inject constructor(
             if (existing != null && existing.id != id) progressRepo.read(existing.id)?.let { progressRepo.write(it.copy(bookId = id)) }
             bookDao.upsert(entity.copy(id = id))
             if (existing != null && existing.id != id) bookDao.delete(existing.id)
-            val changed = !entity.downloaded || (entry.etag.isNotBlank() && entity.remoteEtag != entry.etag) || entity.sizeBytes != entry.size
+            val changed = !entity.downloaded || entity.spineJson.toStringList().firstOrNull()?.let { !File(it).isFile } == true || (entry.etag.isNotBlank() && entity.remoteEtag != entry.etag) || entity.sizeBytes != entry.size
             if (entity.keepOffline && changed) downloadIds += id
         }
         bookDao.getAll().filter { !it.localOnly }.forEach { bookDao.setMissing(it.id, it.id !in keepIds) }
@@ -126,6 +126,13 @@ class BookRepository @Inject constructor(
         downloadAndExtract(settings, id, entity.relativePath, remote.etag, remote.size)
     }
 
+    suspend fun navigation(book: Book): String = withContext(Dispatchers.IO) {
+        if (book.tocJson != "[]") return@withContext book.tocJson
+        val root = extractionRoot(book) ?: return@withContext "[]"
+        val toc = runCatching { epubParser.parse(root).tocJson }.getOrDefault("[]")
+        if (toc != "[]") bookDao.updateToc(book.id, toc, JSONArray(book.spine).toString())
+        toc
+    }
     suspend fun opened(id: String) { bookDao.opened(id, System.currentTimeMillis()) }
     fun retain(book: Book): () -> Unit {
         val root = extractionRoot(book)?.path ?: return {}
@@ -142,6 +149,7 @@ class BookRepository @Inject constructor(
         return dir
     }
     suspend fun cleanupRevisions() = withContext(Dispatchers.IO) {
+        context.cacheDir.listFiles().orEmpty().filter { it.isFile && (it.name.startsWith("download-") || it.name.startsWith("import-") || it.name.matches(Regex("[a-f0-9]{32}\\.epub"))) }.forEach { it.delete() }
         val current = bookDao.getAll().mapNotNull { extractionRoot(it.toBook(null))?.path }.toSet()
         booksDir.listFiles().orEmpty().filter { it.isDirectory && it.name.matches(Regex("[a-f0-9]{32}(-[a-f0-9-]+)?")) }.forEach { dir ->
             if (dir.canonicalPath !in current && !leases.containsKey(dir.canonicalPath)) dir.deleteRecursively()
@@ -151,9 +159,10 @@ class BookRepository @Inject constructor(
     suspend fun removeLocalCopy(id: String) = libraryMutex.withLock {
         val entity = bookDao.getById(id) ?: return@withLock
         val root = extractionRoot(entity.toBook(null))
-        require(root == null || !leases.containsKey(root.path)) { "Buch zuerst schließen." }
+        require((root == null || !leases.containsKey(root.path)) && leases.keys.none { java.io.File(it).name.let { n -> n == id || n.startsWith("$id-") } }) { "Buch zuerst schließen." }
         de.folio.reader.data.local.LocalBookFiles.remove(booksDir, id)
         if (entity.localOnly || entity.missingRemotely) bookDao.delete(id) else bookDao.clearDownload(id)
+        cleanupRevisions()
     }
     suspend fun history(id: String) = progressRepo.history(id)
     suspend fun exportProgress() = progressRepo.export()
@@ -179,7 +188,7 @@ class BookRepository @Inject constructor(
             val revision = digest.digest().joinToString("") { "%02x".format(it) }
             val id = BookId.fromPath("local:$revision")
             val existing = bookDao.getById(id)
-            if (existing?.downloaded == true) return@withContext id
+            if (existing?.downloaded == true && existing.spineJson.toStringList().all { File(it).isFile }) return@withContext id
             val directory = File(booksDir, "$id-${java.util.UUID.randomUUID()}"); bookDir = directory
             val job = kotlin.coroutines.coroutineContext
             epubParser.extract(tmp, directory, minOf(maxBytes, context.filesDir.usableSpace - 64L * 1024 * 1024)) { job.ensureActive() }
@@ -393,7 +402,7 @@ class BookRepository @Inject constructor(
         author = author,
         coverPath = coverPath,
         spine = spineJson.toStringList(),
-        downloaded = downloaded,
+        downloaded = downloaded && spineJson.toStringList().firstOrNull()?.let { File(it).isFile } == true,
         sizeBytes = sizeBytes,
         progress = progress,
         favorite = favorite,

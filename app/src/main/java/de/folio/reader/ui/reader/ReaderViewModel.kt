@@ -20,6 +20,7 @@ import javax.inject.Inject
     val layouts: Map<String, Boolean> = emptyMap(), val layoutMode: BookLayoutMode = BookLayoutMode.AUTO,
     val error: String? = null, val remotePosition: ReadingProgress? = null,
     val editionChanged: Boolean = false, val restoreToken: Long = 0, val fragment: String = "",
+    val returnPosition: ReadingProgress? = null,
     val zoom: Float = 1f, val history: List<ReadingProgress> = emptyList(), val bookmarks: List<ReadingProgress> = emptyList(),
 )
 
@@ -39,8 +40,9 @@ class ReaderViewModel @Inject constructor(
     private var observeJob: Job? = null
     private var saveJob: Job? = null
     private var release: (() -> Unit)? = null
-    private var changedAt: Long? = null
-    private var generation = 0L
+    @Volatile private var changedAt: Long? = null
+    @Volatile private var generation = 0L
+    private var lastNavigationAt = 0L
     private val saveLock = Mutex()
     private var appliedPosition: ReadingProgress? = null
 
@@ -52,18 +54,19 @@ class ReaderViewModel @Inject constructor(
             try { bookRepository.observeBook(bookId).collect { current ->
                 if (!initialized) {
                     initialized = true
+                    current?.let { release = bookRepository.retain(it) }
                     val saved = current?.progress
                     val editionChanged = saved?.contentRevision?.isNotBlank() == true && current != null && saved.contentRevision != current.contentRevision
                     val root = current?.let { bookRepository.extractionRoot(it) }
                     val indexByPath = if (saved?.chapterPath?.isNotBlank() == true && root != null && current != null) current.spine.indexOfFirst { java.io.File(it).relativeTo(root).invariantSeparatorsPath == saved.chapterPath } else -1
-                    _state.value = ReaderUiState(book = current, favorite = current?.favorite ?: false, loading = false,
+                    _state.value = ReaderUiState(book = current?.copy(tocJson = bookRepository.navigation(current)), favorite = current?.favorite ?: false, loading = false,
                         spineIndex = (if (indexByPath >= 0) indexByPath else saved?.spineIndex ?: 0).coerceIn(0, (current?.spine?.lastIndex ?: 0).coerceAtLeast(0)),
                         restoreScrollFraction = saved?.scrollFraction ?: 0f, chapterFraction = saved?.scrollFraction ?: 0f,
                         restoreCharOffset = if (editionChanged) -1 else saved?.charOffset ?: -1, editionChanged = editionChanged,
                         layouts = current?.let { bookRepository.readLayouts(it) }.orEmpty(),
                         layoutMode = settingsRepository.bookLayout(bookId).first(), zoom = settingsRepository.bookZoom(bookId))
                     appliedPosition = saved
-                    current?.let { release = bookRepository.retain(it); bookRepository.opened(it.id) }
+                    current?.let { bookRepository.opened(it.id) }
                     refreshNavigation()
                     refreshRemote()
                 } else if (current != null) {
@@ -84,14 +87,17 @@ class ReaderViewModel @Inject constructor(
     fun acceptRemote() { val p = _state.value.remotePosition ?: return; restore(p, false); appliedPosition = p; _state.update { it.copy(remotePosition = null) } }
     fun dismissRemote() { appliedPosition = _state.value.remotePosition; _state.update { it.copy(remotePosition = null) } }
     fun clearError() { _state.update { it.copy(error = null, editionChanged = false) } }
-    fun goToChapter(index: Int, restoreFraction: Float = 0f, fragment: String = "") {
+    fun goToChapter(index: Int, restoreFraction: Float = 0f, fragment: String = "", rememberReturn: Boolean = false) {
         val book = _state.value.book ?: return
         if (book.spine.isEmpty()) return
-        _state.update { it.copy(spineIndex = index.coerceIn(0, book.spine.lastIndex), restoreScrollFraction = restoreFraction,
+        _state.update { it.copy(returnPosition = if (rememberReturn) displayPosition() else it.returnPosition, spineIndex = index.coerceIn(0, book.spine.lastIndex), restoreScrollFraction = restoreFraction,
             restoreCharOffset = -1, chapterFraction = restoreFraction, restoreToken = it.restoreToken + 1, fragment = fragment) }
         scheduleSave()
     }
-    fun openLink(path: String, fragment: String) { val index = _state.value.book?.spine?.indexOf(path) ?: -1; if (index >= 0) goToChapter(index, 0f, fragment) }
+    fun openLink(path: String, fragment: String) { val index = _state.value.book?.spine?.indexOf(path) ?: -1; if (index >= 0) goToChapter(index, 0f, fragment, true) }
+    private fun displayPosition(): ReadingProgress? { val s = _state.value; val book = s.book ?: return null
+        return ReadingProgress(book.id, s.spineIndex, s.restoreScrollFraction, s.restoreCharOffset, 0, "display", contentRevision = book.contentRevision) }
+    fun returnToPosition() { val p = _state.value.returnPosition ?: return; restore(p); _state.update { it.copy(returnPosition = null) } }
     fun nextChapter() { val s = _state.value; if (s.spineIndex < (s.book?.spine?.lastIndex ?: 0)) goToChapter(s.spineIndex + 1) }
     fun previousChapter() { if (_state.value.spineIndex > 0) goToChapter(_state.value.spineIndex - 1, 1f) }
     fun onPosition(fraction: Float, charOffset: Int, fromUser: Boolean) {
@@ -109,12 +115,14 @@ class ReaderViewModel @Inject constructor(
     fun removeBookmark(index: Int) = action { settingsRepository.removeBookmark(id.value, index); refreshNavigation() }
     fun restore(p: ReadingProgress, save: Boolean = true) {
         val book = _state.value.book ?: return
-        _state.update { it.copy(spineIndex = p.spineIndex.coerceIn(0, book.spine.lastIndex), restoreScrollFraction = p.scrollFraction, chapterFraction = p.scrollFraction,
+        val root = bookRepository.extractionRoot(book)
+        val byPath = if (root != null && p.chapterPath.isNotBlank()) book.spine.indexOfFirst { java.io.File(it).relativeTo(root).invariantSeparatorsPath == p.chapterPath } else -1
+        _state.update { it.copy(returnPosition = if (save) displayPosition() else it.returnPosition, spineIndex = (if (byPath >= 0) byPath else p.spineIndex).coerceIn(0, book.spine.lastIndex), restoreScrollFraction = p.scrollFraction, chapterFraction = p.scrollFraction,
             restoreCharOffset = if (p.contentRevision.isNotBlank() && p.contentRevision != book.contentRevision) -1 else p.charOffset, fragment = "", restoreToken = it.restoreToken + 1) }
         if (save) scheduleSave()
     }
     fun saveNow() { saveJob?.cancel(); persist() }
-    private fun scheduleSave() { generation++; changedAt = System.currentTimeMillis(); saveJob?.cancel(); saveJob = viewModelScope.launch { delay(800); persist() } }
+    private fun scheduleSave() { generation++; lastNavigationAt = maxOf(System.currentTimeMillis(), lastNavigationAt + 1, (_state.value.book?.progress?.updatedAt ?: 0) + 1); changedAt = lastNavigationAt; saveJob?.cancel(); saveJob = viewModelScope.launch { delay(800); persist() } }
     private suspend fun snapshot(at: Long): ReadingProgress? {
         val s = _state.value; val book = s.book ?: return null; if (book.spine.isEmpty()) return null
         val root = bookRepository.extractionRoot(book)
@@ -134,8 +142,8 @@ class ReaderViewModel @Inject constructor(
                 val p = ReadingProgress(book.id, captured.spineIndex, captured.restoreScrollFraction, captured.restoreCharOffset, at, settingsRepository.deviceId(),
                     finished = book.progress?.finished ?: false, contentRevision = book.contentRevision,
                     chapterPath = root?.let { java.io.File(book.spine[captured.spineIndex]).relativeTo(it).invariantSeparatorsPath }.orEmpty())
-                bookRepository.saveProgress(p); appliedPosition = p
-                if (generation == capturedGeneration) changedAt = null
+                bookRepository.saveProgress(p)
+                withContext(Dispatchers.Main.immediate) { appliedPosition = p; if (generation == capturedGeneration) changedAt = null }
             } catch (e: CancellationException) { throw e } catch (e: Exception) { _state.update { it.copy(error = "Lesestand konnte nicht gespeichert werden: ${e.message}") } }
         } }
     }

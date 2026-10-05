@@ -2,6 +2,7 @@ package de.folio.reader.ui.library
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -94,6 +95,9 @@ fun LibraryScreen(
     val query by viewModel.query.collectAsStateWithLifecycle()
     val sort by viewModel.sort.collectAsStateWithLifecycle()
     val offlineOnly by viewModel.offlineOnly.collectAsStateWithLifecycle()
+    val readFilter by viewModel.readFilter.collectAsStateWithLifecycle()
+    var syncDetails by remember { mutableStateOf(false) }
+    if (syncDetails) androidx.compose.material3.AlertDialog(onDismissRequest = { syncDetails = false }, title = { Text("Synchronisierung") }, text = { Text(syncStatus.message ?: "Lokal gespeichert") }, confirmButton = { androidx.compose.material3.TextButton(onClick = { syncDetails = false }) { Text("Schließen") } })
     val openedBook by viewModel.openedBook.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(openedBook) { openedBook?.let { viewModel.consumedOpenedBook(); onBookSelected(it) } }
@@ -150,8 +154,9 @@ fun LibraryScreen(
         },
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
-            if (syncStatus.running) SyncBanner(syncStatus, eInk)
-            else syncStatus.message?.let { Text(it, modifier = Modifier.padding(16.dp)) }
+            Box(Modifier.fillMaxWidth().height(64.dp).clickable { syncDetails = true }) {
+                SyncBanner(syncStatus.copy(message = syncStatus.message?.lineSequence()?.firstOrNull()), eInk)
+            }
             actionError?.let { Text(it, modifier = Modifier.padding(16.dp)) }
             notice?.let { Row(verticalAlignment = Alignment.CenterVertically) { Text(it, Modifier.weight(1f).padding(start = 16.dp)); androidx.compose.material3.TextButton(onClick = viewModel::undoLast) { Text("Rückgängig") } } }
             if (books.isNotEmpty()) {
@@ -159,6 +164,7 @@ fun LibraryScreen(
                     label = { Text("Titel, Autor oder Ordner suchen") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
                 Row { androidx.compose.material3.TextButton(onClick = viewModel::cycleSort) { Text("Sortierung: $sort") }
                     androidx.compose.material3.TextButton(onClick = viewModel::toggleOfflineFilter) { Text(if (offlineOnly) "✓ Offline" else "Offline") } }
+                androidx.compose.material3.TextButton(onClick = viewModel::cycleReadFilter) { Text("Status: $readFilter") }
             }
             if (!isConfigured && books.isNotEmpty()) Text("Offline-Bibliothek · Nextcloud in den Einstellungen verbinden", modifier = Modifier.padding(16.dp))
 
@@ -236,7 +242,7 @@ fun LibraryScreen(
 private fun SyncBanner(status: SyncStatus, eInk: Boolean) {
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
-            text = status.message ?: "Synchronisiere …",
+            text = status.message ?: if (status.running) "Synchronisiere …" else "Lokal gespeichert",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -248,7 +254,7 @@ private fun SyncBanner(status: SyncStatus, eInk: Boolean) {
                 progress = { fraction },
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             )
-        } else if (!eInk) {
+        } else if (!eInk && status.running) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             )
@@ -444,7 +450,7 @@ private fun BookCard(
                     .padding(6.dp)
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface)
+                    .background(MaterialTheme.colorScheme.surface).border(1.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
                     .clickable(onClick = onToggleFavorite),
                 contentAlignment = Alignment.Center,
             ) {
@@ -476,7 +482,7 @@ private fun BookCard(
                     .padding(6.dp)
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface)
+                    .background(MaterialTheme.colorScheme.surface).border(1.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
                     .toggleable(value = book.isFinished, role = Role.Checkbox,
                         onValueChange = { onToggleFinished() })
                     .semantics { stateDescription = if (book.isFinished) "Gelesen" else "Ungelesen" },
@@ -507,6 +513,7 @@ private fun BookCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        Text("${book.sizeBytes / (1024 * 1024)} MB" + if (book.downloaded) " · offline" else " · in Nextcloud", style = MaterialTheme.typography.bodySmall)
         if (book.downloadError.isNotBlank()) Text(book.downloadError, style = MaterialTheme.typography.bodySmall)
         if (book.localOnly) Text("Lokaler Import · ohne Cloud-Abgleich", style = MaterialTheme.typography.bodySmall)
         if (book.missingRemotely) Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)

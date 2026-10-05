@@ -157,7 +157,7 @@ class SettingsRepository @Inject constructor(
         val previous = currentNextcloudSettings()
         if (context.dataStore.data.first()[Keys.LIBRARY_BOUND] == true) {
             require(previous.serverUrl.trimEnd('/') == s.serverUrl.trim().trimEnd('/') &&
-                previous.username == s.username.trim() && previous.rootPath.trim('/') == s.rootPath.trim('/') && previous.progressDir.trim('/') == s.progressDir.trim('/')) {
+                previous.davUser.ifBlank { previous.username } == s.davUser.ifBlank { s.username.trim() } && previous.rootPath.trim('/') == s.rootPath.trim('/') && previous.progressDir.trim('/') == s.progressDir.trim('/')) {
                 "Diese Installation ist an eine Bibliothek gebunden. Server, Benutzer und Bücherordner können nicht ohne Datenmigration gewechselt werden. Das App-Passwort kann erneuert werden."
             }
         }

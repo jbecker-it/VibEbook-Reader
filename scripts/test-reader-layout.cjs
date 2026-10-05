@@ -8,6 +8,7 @@ function injection(fixed = null, options = {}) {
     const values = {
         'preferences.leftHanded': 'false',
         'if (preferences.wideTapZones) "0.4" else "0.3"': '0.4',
+        'jsString(restoreFragment)': JSON.stringify(options.fragment || ''),
         'jsString(colorRules)': JSON.stringify('html,body{color:#000!important;background:#fff!important;}'),
         'fixedLayout?.toString() ?: "null"': String(fixed),
         'preferences.margin': '24', 'preferences.fontSize': String(options.fontSize || 32),
@@ -130,6 +131,9 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
         await page.getByRole('button',{name:'Zoomregler öffnen',exact:true}).click();
         await page.getByRole('button',{name:'Vergrößern',exact:true}).click();
         assert.equal(await page.evaluate(() => __folio.zoom),1.5);
+        assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')),'Vergrößern');
+        await page.getByRole('button',{name:'Zoomregler versetzen',exact:true}).click();
+        assert.equal(await page.evaluate(() => document.getElementById('folio-zoom').style.right),'8px');
         await page.getByRole('button',{name:'Vergrößern',exact:true}).click();
         await page.getByRole('button',{name:'Ausschnitt nach rechts',exact:true}).click();
         await page.getByRole('button',{name:'Ausschnitt nach unten',exact:true}).click();
@@ -138,6 +142,13 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
         await page.getByRole('button',{name:'Ganze Seite anzeigen',exact:true}).click();
         assert.equal(await page.evaluate(() => __folio.zoom),1);
         assert.equal(await page.evaluate(() => __folio.panX+__folio.panY),0);
+
+        // Manual panel steps stay on the current page until every overlapping crop is covered.
+        await page.getByRole('button',{name:'Vergrößern',exact:true}).click();
+        await page.evaluate(() => { __folio.panX=0; __folio.panY=0; __folio.layout(); });
+        await page.getByRole('button',{name:'Nächster Ausschnitt',exact:true}).click();
+        assert.ok(await page.evaluate(() => __folio.panX>0 || __folio.panY>0));
+        assert.ok(await page.evaluate(() => events.every(e=>e===false)));
 
         // An ordinary inline image with prose must not trigger fixed-page detection.
         await load('<html><body><svg width="300" height="400"></svg><p>Ordinary prose</p></body></html>',null);

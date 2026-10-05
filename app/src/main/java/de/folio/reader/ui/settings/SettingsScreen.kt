@@ -52,6 +52,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val saved by viewModel.nextcloudSettings.collectAsStateWithLifecycle()
+    val bound by viewModel.libraryBound.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val pageLayout by viewModel.pageLayout.collectAsStateWithLifecycle()
     val wifiOnly by viewModel.wifiOnly.collectAsStateWithLifecycle()
@@ -87,6 +88,7 @@ fun SettingsScreen(
     var davUser by remember { mutableStateOf("") }
     var picker by remember { mutableStateOf(false) }
     var pickerPath by remember { mutableStateOf("") }
+    var pickerProgress by remember { mutableStateOf(false) }
     LaunchedEffect(serverUrl, user, password, rootPath, progressDir) { viewModel.resetConnectionTest() }
     LaunchedEffect(loginResult) { loginResult?.let { serverUrl = it.serverUrl; user = it.username; password = it.password; davUser = it.davUser } }
 
@@ -106,13 +108,13 @@ fun SettingsScreen(
     )
 
     if (picker) {
-        androidx.compose.material3.AlertDialog(onDismissRequest = { picker = false }, title = { Text("Bücherordner wählen") },
+        androidx.compose.material3.AlertDialog(onDismissRequest = { picker = false }, title = { Text(if (pickerProgress) "Fortschrittsordner wählen" else "Bücherordner wählen") },
             text = { Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("/" + pickerPath)
                 if (pickerPath.isNotEmpty()) androidx.compose.material3.TextButton(onClick = { pickerPath = pickerPath.substringBeforeLast('/', ""); viewModel.browseFolders(current(), pickerPath) }) { Text("Eine Ebene höher") }
                 folders.forEach { folder -> androidx.compose.material3.TextButton(onClick = { pickerPath = folder; viewModel.browseFolders(current(), folder) }) { Text(folder.substringAfterLast('/')) } }
                 message?.let { Text(it) }
-            } }, confirmButton = { androidx.compose.material3.TextButton(onClick = { rootPath = pickerPath; picker = false }) { Text("Diesen Ordner verwenden") } },
+            } }, confirmButton = { androidx.compose.material3.TextButton(onClick = { if (pickerProgress) progressDir = pickerPath else rootPath = pickerPath; picker = false }) { Text("Diesen Ordner verwenden") } },
             dismissButton = { androidx.compose.material3.TextButton(onClick = { picker = false }) { Text("Abbrechen") } })
     }
     Scaffold(
@@ -198,12 +200,12 @@ fun SettingsScreen(
             } else OutlinedButton(onClick = { viewModel.startLogin(serverUrl) }, enabled = serverUrl.startsWith("https://")) { Text("Mit Nextcloud im Browser anmelden") }
             Text("In Nextcloud unter Persönliche Einstellungen → Sicherheit ein App-Passwort erstellen. Ordner sind relativ zu deinen Nextcloud-Dateien.")
             OutlinedTextField(
-                value = serverUrl, onValueChange = { serverUrl = it; viewModel.resetConnectionTest() },
+                value = serverUrl, readOnly = bound, onValueChange = { serverUrl = it; davUser = ""; viewModel.resetConnectionTest() },
                 label = { Text("Serveradresse (https://cloud.example.com)") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
-                value = user, onValueChange = { user = it; viewModel.resetConnectionTest() },
+                value = user, readOnly = bound, onValueChange = { user = it; davUser = ""; viewModel.resetConnectionTest() },
                 label = { Text("Benutzername") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
@@ -216,17 +218,19 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
-                value = rootPath, onValueChange = { rootPath = it; viewModel.resetConnectionTest() },
+                value = rootPath, readOnly = bound, onValueChange = { rootPath = it; viewModel.resetConnectionTest() },
                 label = { Text("Unterordner mit Büchern (optional)") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
-                value = progressDir, onValueChange = { progressDir = it; viewModel.resetConnectionTest() },
+                value = progressDir, readOnly = bound, onValueChange = { progressDir = it; viewModel.resetConnectionTest() },
                 label = { Text("Ordner für Lesefortschritt") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
 
-            OutlinedButton(onClick = { pickerPath = rootPath; viewModel.browseFolders(current(), pickerPath); picker = true }, enabled = current().isConfigured) { Text("Bücherordner auswählen") }
+            OutlinedButton(onClick = { pickerProgress = false; pickerPath = rootPath; viewModel.browseFolders(current(), pickerPath); picker = true }, enabled = current().isConfigured && !bound) { Text("Bücherordner auswählen") }
+            OutlinedButton(onClick = { pickerProgress = true; pickerPath = progressDir; viewModel.browseFolders(current(), pickerPath); picker = true }, enabled = current().isConfigured && !bound) { Text("Fortschrittsordner auswählen") }
+            if (bound) Text("Bibliothek fest verbunden. App-Passwort erneuern oder im Browser für dasselbe Konto anmelden.")
             ConnectionStatus(connectionTest, eInkMode)
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -282,7 +286,7 @@ private fun ConnectionStatus(state: ConnectionTest, eInk: Boolean) {
         }
         ConnectionTest.Success -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
-            Text("Verbindung erfolgreich", modifier = Modifier.padding(start = 8.dp))
+            Text("Bücher lesbar · Lesestand speicherbar", modifier = Modifier.padding(start = 8.dp))
         }
         is ConnectionTest.Failure -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Error, null, tint = MaterialTheme.colorScheme.error)

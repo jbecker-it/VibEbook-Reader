@@ -57,4 +57,9 @@ class NextcloudTest {
         assertEquals(ReadingProgress.merge(a, b), ReadingProgress.merge(b, a))
         assertEquals(ReadingProgress.merge(a, b), ReadingProgress.merge(ReadingProgress.merge(a, b), b))
     }
+    @Test fun oldAutomaticCompletionTiesAlsoConverge() {
+        val a = ReadingProgress("book", 1, .2f, updatedAt = 10, deviceId = "a")
+        val b = a.copy(finished = true)
+        assertEquals(ReadingProgress.merge(a, b), ReadingProgress.merge(b, a))
+    }
 }

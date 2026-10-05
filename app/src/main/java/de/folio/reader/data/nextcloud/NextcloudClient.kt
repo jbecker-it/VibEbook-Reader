@@ -251,6 +251,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
             require(remote == null || listOf(remote.updatedAt, remote.favoriteUpdatedAt, remote.finishedUpdatedAt).all { it <= now + 86400000 }) { "Lesestand liegt in der Zukunft. Gerätezeit auf beiden Geräten prüfen." }
             require(remote == null || remote.bookId == bookId) { "Fortschrittsdatei gehört zu einem anderen Buch." }
             val local = readLocal()
+            require(local == null || listOf(local.updatedAt, local.favoriteUpdatedAt, local.finishedUpdatedAt).all { it <= now + 86400000 }) { "Lokaler Lesestand liegt in der Zukunft. Gerätezeit prüfen." }
             require(local == null || local.bookId == bookId) { "Lokaler Fortschritt gehört zu einem anderen Buch." }
             val merged = ReadingProgress.merge(local, remote) ?: return null
             if (merged == remote) return merged

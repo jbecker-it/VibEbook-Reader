@@ -33,8 +33,8 @@ CI is necessary, not evidence that these physical-device checks passed.
 ## Known initial-release limits
 
 - One bound library per installation; changing its server/account/root requires a future explicit migration.
-- Full download of all discovered EPUBs; no selective-download policy yet.
-- Old extraction revisions are retained to avoid deleting files in use. For books missing remotely, the explicit local-removal action removes all their local revisions after confirmation and retains progress. Automatic cleanup for updated books is not implemented.
+- Selective downloads and storage budgets are configurable; existing downloaded titles remain available until explicitly removed.
+- Active extraction revisions are protected by reader leases. Unused revisions and abandoned temporary downloads are cleaned at the next library operation; verify concurrent open/update/removal on devices.
 - No vendor-specific refresh controls; some branded key codes may require device-specific mapping.
 - Reader typography can be affected by publisher CSS. Hardware/device tests and actual Nextcloud validation remain mandatory before release.
 
@@ -54,3 +54,15 @@ CI is necessary, not evidence that these physical-device checks passed.
 - Enqueue sync offline, then reconnect. Queued work must show a static explanation, not a running spinner; the sync button must remain available.
 - With a metered connection (including VPNs Android classifies as metered), enable “Nur ungetaktete Netzwerke”, queue sync, then disable the setting. The pending request and periodic constraints must update without clearing app data; active downloads must not be interrupted. The restriction is never bypassed automatically.
 - Simulate a transient server failure: retry/backoff must not be labeled “waiting for network”. Manual retry should replace queued work using the current settings.
+
+## New regression and device flows
+
+- Install the release APK over version 23 without clearing data. Confirm signature and increasing versionCode, Room migrations, old EPUB access and old progress JSON.
+- Enable/disable automatic downloads. Download one undistributed title from every tab; it must open after success. Remove its local copy, retain progress and re-download.
+- Rename/move a book after catalog creation; sync another upgraded device and confirm the same progress ID. Copying a file must create an independent file identity.
+- Open Nextcloud browser login (including 2FA and email login). Cancel, retry, renew the password for the same bound account and reject a different account.
+- Test a read-only progress folder. Setup must report write failure. Probe cleanup must never delete a preexisting file.
+- Read offline, save, stop/restart the process, reconnect and confirm durable delivery. Edit while upload is in flight; only the confirmed revision becomes nonpending.
+- Jump via EPUB nav/NCX and same-/cross-chapter footnotes; return to the prior position. Restore history/bookmarks without resetting favorite or completion.
+- Test Zoom with D-pad focus, moved controls, manual crop progression, reset, close/reopen and chapter change. Verify one actual page turn per gesture.
+- Export progress using Android SAF and reimport; confirm independent favorite/completion and no credentials in the JSON. Import local EPUB and CBZ via file picker and Nextcloud “Open with”.

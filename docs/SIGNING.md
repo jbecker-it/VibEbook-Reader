@@ -23,7 +23,7 @@ Keep the private backup: this is the key for future updates. Restore the same se
 - Signing occurs after compilation; private signing material is not available to Gradle/dependencies. Temporary key files are removed when the signing process exits.
 - Fork pull requests run tests but do not receive the secret or publish APKs. Repository-owned PRs are trusted build code; review workflow/script changes accordingly.
 - `versionCode` comes from this workflow's increasing `github.run_number`; reruns retain the same code. Keep `.github/workflows/buildapk.yml` and its counter. If moving workflows, set a version offset above the highest version already distributed.
-- The debug variant remains the current testing build. Future release variants must use the same distribution signing script/key and a higher version code to preserve update compatibility.
+- Distribution now uses the minimized release variant with the same signing script/key and increasing version code. Debug APKs remain test inputs only. GitHub Releases provide direct APKs and SHA-256 checksums; PR builds are prereleases.
 - CI signs and verifies two disposable APKs with one test key, and checks rejection of missing/wrong keys. Those test keys and APKs are not uploaded.
 
 Do not reinstall the latest old **app-debug** artifact expecting future compatibility. Wait for the first successful **folio-apk** build with the permanent certificate.

@@ -60,6 +60,7 @@ class EpubParser {
     fun parse(bookDir: File): EpubBook {
         if (bookDir.walkTopDown().none { it.extension.equals("opf", true) }) return ComicArchiveParser.parse(bookDir)
         val opfFile = locateOpf(bookDir)
+        require(opfFile.length() <= 4 * 1024 * 1024) { "EPUB-Metadaten zu groß." }
         val opfDir = opfFile.parentFile ?: bookDir
 
         val manifest = HashMap<String, ManifestItem>()      // id -> item
@@ -138,6 +139,7 @@ class EpubParser {
     private fun locateOpf(bookDir: File): File {
         val container = File(bookDir, "META-INF/container.xml")
         if (container.exists()) {
+            require(container.length() <= 1024 * 1024) { "EPUB-Container zu groß." }
             val fullPath = container.inputStream().use { readContainerRootfile(it) }
             if (fullPath != null) {
                 val opf = EpubSafety.resolve(bookDir, bookDir, fullPath)

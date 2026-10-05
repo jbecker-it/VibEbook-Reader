@@ -126,6 +126,8 @@ class SyncManager @Inject constructor(
             } else status
         }.combine(progressRepo.pendingCount) { status, count ->
             if (!status.running && status.message == null) status.copy(message = if (count > 0) "Lokal gespeichert · $count Änderungen ausstehend" else "Lokal gespeichert") else status
+        }.combine(failureStore.lastProgressSync) { status, time ->
+            if (status.message == "Lokal gespeichert" && time > 0) status.copy(message = "Synchronisiert um " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(time))) else status
         }.combine(progressRepo.error) { status, error ->
             if (error != null && !status.running) status.copy(message = error) else status
         }.combine(backgroundError) { status, error ->
@@ -143,15 +145,21 @@ class SyncManager @Inject constructor(
     private suspend fun scheduleProgress(all: Boolean) {
         scheduleLock.lock()
         try {
-        val request = OneTimeWorkRequestBuilder<ProgressSyncWorker>()
+        val builder = OneTimeWorkRequestBuilder<ProgressSyncWorker>()
             .setInputData(workDataOf("all" to all))
             .setConstraints(constraints(settingsRepo.wifiOnly.first()))
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()
         withContext(Dispatchers.IO) {
             val infos = workManager.getWorkInfosForUniqueWork(WORK_PROGRESS).get()
             // Keep at most one queued successor, so edits near the end of a running job cannot disappear.
-            if (infos.none { it.state == WorkInfo.State.ENQUEUED })
-                workManager.enqueueUniqueWork(WORK_PROGRESS, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+            val queued = infos.firstOrNull { it.state == WorkInfo.State.ENQUEUED }
+            if (queued == null) workManager.enqueueUniqueWork(WORK_PROGRESS, ExistingWorkPolicy.APPEND_OR_REPLACE, builder).result.get()
+            else if (all) {
+                val replacement = OneTimeWorkRequestBuilder<ProgressSyncWorker>().setId(queued.id)
+                    .setInputData(workDataOf("all" to true)).setConstraints(constraints(settingsRepo.wifiOnly.first()))
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()
+                workManager.updateWork(replacement).get()
+            }
         }
         } finally { scheduleLock.unlock() }
     }
