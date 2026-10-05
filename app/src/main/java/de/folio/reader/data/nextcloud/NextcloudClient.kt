@@ -47,18 +47,20 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
     .callTimeout(120, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()) {
 
     private suspend fun execute(settings: NextcloudSettings, path: String, method: String,
-        body: String? = null, headers: Map<String, String> = emptyMap()): Response {
+        body: String? = null, headers: Map<String, String> = emptyMap(), download: Boolean = false): Response {
         val request = Request.Builder().url(settings.davUrl(path))
             .header("Authorization", Credentials.basic(settings.username.trim(), settings.password, Charsets.UTF_8))
             .method(method, body?.toRequestBody((if (method in listOf("PROPFIND", "PROPPATCH")) "application/xml; charset=utf-8" else "application/json; charset=utf-8").toMediaType()))
         headers.forEach { (key, value) -> request.header(key, value) }
-        return executeRequest(request.build())
+        return executeRequest(request.build(), download)
     }
 
-    private suspend fun executeRequest(request: Request): Response {
+    private suspend fun executeRequest(request: Request, download: Boolean = false): Response {
         val job = coroutineContext[Job]
         return suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
+            // Large comics may stream for minutes; stalled reads and coroutine cancellation still stop them.
+            if (download) call.timeout().timeout(0, TimeUnit.MILLISECONDS)
             @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
             val cancellation = job?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause -> if (cause != null) call.cancel() }
             continuation.invokeOnCancellation { call.cancel() }
@@ -172,7 +174,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
     suspend fun download(settings: NextcloudSettings, path: String, target: File, etag: String = "", maxBytes: Long = 1024L * 1024 * 1024) = withContext(Dispatchers.IO) {
         val temporary = File.createTempFile("download-", ".part", target.parentFile)
         try {
-            execute(settings, path, "GET", headers = if (etag.isBlank()) emptyMap() else mapOf("If-Match" to etag)).use { response ->
+            execute(settings, path, "GET", headers = if (etag.isBlank()) emptyMap() else mapOf("If-Match" to etag), download = true).use { response ->
                 if (response.code != 200) throw DavException(response.code, "Buch laden / GET")
                 val body = response.body ?: throw IOException("Leere Buchantwort.")
                 require(body.contentLength() <= maxBytes) { "Buch überschreitet das Offline-Speicherlimit." }
@@ -237,7 +239,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
             val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true; isExpandEntityReferences = false }
             val doc = factory.newDocumentBuilder().parse(InputSource(StringReader(text)))
             val ps = doc.getElementsByTagNameNS("DAV:", "propstat")
-            require((0 until ps.length).any { i -> val p = ps.item(i) as Element; p.getElementsByTagNameNS("http://owncloud.org/ns", "favorite").length > 0 && p.getElementsByTagNameNS("DAV:", "status").item(0)?.textContent?.split(' ')?.getOrNull(1) == "200" }) { "Nextcloud-Favoriten werden vom Server nicht unterstützt." }
+            require((0 until ps.length).any { i -> val p = ps.item(i) as Element; p.getElementsByTagNameNS("http://owncloud.org/ns", "favorite").length > 0 && p.getElementsByTagNameNS("DAV:", "status").item(0)?.textContent?.trim()?.split(Regex("\\s+"))?.getOrNull(1) == "200" }) { "Nextcloud-Favoriten werden vom Server nicht unterstützt." }
         }
     }
 
@@ -319,16 +321,16 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
                 require(segments.none { '/' in it || '\\' in it }) { "Mehrdeutiger WebDAV-Pfad." }
                 if (segments == requestedSegments) {
                     val status = text(item, "status")
-                    require(status == null || status.split(' ').getOrNull(1) == "200") { "Bibliotheksordner nicht lesbar." }
+                    require(status == null || status.trim().split(Regex("\\s+")).getOrNull(1) == "200") { "Bibliotheksordner nicht lesbar." }
                     val ps = item.getElementsByTagNameNS("DAV:", "propstat")
-                    require((0 until ps.length).any { text(ps.item(it) as Element, "status")?.split(' ')?.getOrNull(1) == "200" }) { "Bibliotheksordner nicht vollständig lesbar." }
+                    require((0 until ps.length).any { text(ps.item(it) as Element, "status")?.trim()?.split(Regex("\\s+"))?.getOrNull(1) == "200" }) { "Bibliotheksordner nicht vollständig lesbar." }
                     foundRoot = true
                     return@mapNotNull null
                 }
                 require(segments.take(requestedSegments.size) == requestedSegments && segments.size == requestedSegments.size + 1) { "WebDAV-Antwort außerhalb des angefragten Ordners." }
                 require(segments.take(baseSegments.size) == baseSegments) { "Ungültiger WebDAV-Pfad." }
                 val propstats = item.getElementsByTagNameNS("DAV:", "propstat")
-                val successful = (0 until propstats.length).map { propstats.item(it) as Element }.filter { text(it, "status")?.split(' ')?.getOrNull(1) == "200" }
+                val successful = (0 until propstats.length).map { propstats.item(it) as Element }.filter { text(it, "status")?.trim()?.split(Regex("\\s+"))?.getOrNull(1) == "200" }
                 require(successful.isNotEmpty()) { "Ordner unvollständig oder nicht lesbar." }
                 val props = item.ownerDocument.createElement("properties")
                 successful.forEach { props.appendChild(it.cloneNode(true)) }

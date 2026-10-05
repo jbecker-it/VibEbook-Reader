@@ -16,8 +16,8 @@ object ComicArchiveParser {
         val spine = images.mapIndexed { index, image ->
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(image.path, bounds)
-            val w = bounds.outWidth.takeIf { it > 0 } ?: 1000
-            val h = bounds.outHeight.takeIf { it > 0 } ?: 1500
+            val w = bounds.outWidth; val h = bounds.outHeight
+            require(w > 0 && h > 0 && w.toLong() * h <= 100000000L) { "Comic enthält ein beschädigtes oder zu großes Bild: ${image.name}" }
             val path = image.relativeTo(root).invariantSeparatorsPath.split('/').joinToString("/") { Uri.encode(it) }
             val page = File(pages, "${index.toString().padStart(5, '0')}.html")
             page.writeText("""<!DOCTYPE html><html><head><meta name="viewport" content="width=$w,height=$h"><style>html,body{margin:0;padding:0;width:${w}px;height:${h}px}img{width:100%;height:100%;object-fit:contain}</style></head><body><img src="../$path" alt="Seite ${index + 1}"></body></html>""")

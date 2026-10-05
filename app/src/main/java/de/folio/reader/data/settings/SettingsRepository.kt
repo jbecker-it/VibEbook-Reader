@@ -122,15 +122,15 @@ class SettingsRepository @Inject constructor(
     suspend fun setBookZoom(id: String, zoom: Float) { context.dataStore.edit { it[floatPreferencesKey("book_zoom_$id")] = zoom.coerceIn(1f, 3f) } }
     suspend fun libraryLocation(): Pair<String, String> { val p = context.dataStore.data.first(); return (p[stringPreferencesKey("library_tab")] ?: "BROWSE") to (p[stringPreferencesKey("library_folder")] ?: "") }
     suspend fun saveLibraryLocation(tab: String, folder: String) { context.dataStore.edit { it[stringPreferencesKey("library_tab")] = tab; it[stringPreferencesKey("library_folder")] = folder } }
-    suspend fun bookmarks(id: String): List<de.folio.reader.domain.model.ReadingProgress> {
+    suspend fun bookmarks(id: String): List<de.folio.reader.domain.model.Bookmark> {
         val arr = org.json.JSONArray(context.dataStore.data.first()[stringPreferencesKey("bookmarks_$id")] ?: "[]")
-        return (0 until arr.length()).map { de.folio.reader.domain.model.ReadingProgress.fromJson(arr.getJSONObject(it).toString()) }
+        return (0 until arr.length()).map { val o = arr.getJSONObject(it); val p = de.folio.reader.domain.model.ReadingProgress.fromJson(o.toString()); de.folio.reader.domain.model.Bookmark(o.optString("_label").ifBlank { "Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).toInt()} %" }, p) }
     }
-    suspend fun addBookmark(progress: de.folio.reader.domain.model.ReadingProgress) { context.dataStore.edit { p ->
+    suspend fun addBookmark(progress: de.folio.reader.domain.model.ReadingProgress, title: String = "") { context.dataStore.edit { p ->
         val key = stringPreferencesKey("bookmarks_${progress.bookId}")
         val arr = org.json.JSONArray(p[key] ?: "[]")
         require(arr.length() < 200) { "Maximal 200 Lesezeichen pro Buch." }
-        arr.put(org.json.JSONObject(progress.toJson())); p[key] = arr.toString()
+        arr.put(org.json.JSONObject(progress.toJson()).put("_label", title.trim().take(120))); p[key] = arr.toString()
     } }
     suspend fun removeBookmark(id: String, index: Int) { context.dataStore.edit { p ->
         val key = stringPreferencesKey("bookmarks_$id"); val arr = org.json.JSONArray(p[key] ?: "[]"); arr.remove(index); p[key] = arr.toString()

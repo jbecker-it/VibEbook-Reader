@@ -81,4 +81,16 @@ class ReaderLifecycleTest {
         withTimeout(10000) { while (progress.read(id)?.charOffset != 80) delay(10) }
         assertEquals(80, progress.read(id)!!.charOffset); opened.second.clear()
     }
+    @Test fun nonSpineFootnoteReturnsWithoutOverwritingMainPosition() = runBlocking {
+        val base = ReadingProgress(id, 0, .2f, 20, 100, "other")
+        progress.write(base, false)
+        val opened = open(); val vm = opened.first
+        val notes = File(vm.bookRoot(), "notes.xhtml").apply { writeText("<html><body id='note'>Footnote</body></html>") }
+        vm.openLink(notes.path, "note"); assertEquals(notes.canonicalPath, vm.state.value.linkedDocument)
+        vm.onPosition(.8f, 80, true); vm.saveNow(); delay(100)
+        assertEquals(base, progress.read(id))
+        vm.returnToPosition(); assertNull(vm.state.value.linkedDocument); assertEquals(20, vm.state.value.restoreCharOffset)
+        vm.saveNow(); withTimeout(10000) { while ((progress.read(id)?.updatedAt ?: 0) <= 100) delay(10) }
+        assertEquals(20, progress.read(id)!!.charOffset); opened.second.clear()
+    }
 }

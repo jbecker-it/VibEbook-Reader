@@ -513,7 +513,7 @@ private fun BookCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text("${book.sizeBytes / (1024 * 1024)} MB" + if (book.downloaded) " · offline" else " · in Nextcloud", style = MaterialTheme.typography.bodySmall)
+        Text("Datei: ${book.sizeBytes / (1024 * 1024)} MB" + if (book.downloaded) " · offline" else " · in Nextcloud", style = MaterialTheme.typography.bodySmall)
         if (book.downloadError.isNotBlank()) Text(book.downloadError, style = MaterialTheme.typography.bodySmall)
         if (book.localOnly) Text("Lokaler Import · ohne Cloud-Abgleich", style = MaterialTheme.typography.bodySmall)
         if (book.missingRemotely) Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)

@@ -181,4 +181,11 @@ class NextcloudHttpTest {
         assertNotNull(server.takeRequest().getHeader("Authorization"))
         try { client.sameServer(server.url("/"), "https://foreign.example/poll"); fail("Foreign origin expected") } catch (_: IllegalArgumentException) { }
     }
+    @Test fun futureClockDoesNotPoisonRemoteProgress() = runBlocking {
+        val future = progress(System.currentTimeMillis() + 2 * 86400000L)
+        server.enqueue(MockResponse().setBody(future.toJson()).addHeader("ETag", "\"future\""))
+        try { client.syncProgress(settings, "progress.json", "book") { progress(10) }; fail("Future clock must be reported") }
+        catch (e: IllegalArgumentException) { assertTrue(e.message!!.contains("Gerätezeit")) }
+        assertEquals(1, server.requestCount)
+    }
 }

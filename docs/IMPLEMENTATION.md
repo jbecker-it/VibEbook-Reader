@@ -19,7 +19,7 @@ Die Änderungen sind auf dem bestehenden Draft-PR #4. Main wird nicht automatisc
 | 11 | alle Progress-Lesewege über AtomicFile und gemeinsamen Mutex | Wiederherstellung aus `.bak`; beschädigte Datei isoliert |
 | 12 | Nextcloud `oc:id` in gemeinsamem `catalog.json` auf bestehende Progress-ID abgebildet; Pfad-Aliase; Inhaltsrevision und Kapitelpfad; Ausgabewechsel sichtbar | Register behält ID nach Umbenennung |
 | 13 | E-Ink ohne laufende Spinner/Navigationstransitionen; deckende Cover-Schalter mit Rand; Statusbereich mit fester Höhe | Geräteprüfung bleibt nötig |
-| 14 | EPUB-3-nav, EPUB-2-NCX, interne Links mit Fragmenten; Rücksprung zur vorherigen Stelle | verschachtelte nav/NCX-Fixtures und Chromium-Pagination |
+| 14 | EPUB-3-nav, EPUB-2-NCX, interne Links mit Fragmenten (auch Fußnotendokumente außerhalb der Spine); externe Links nach Bestätigung im Browser; Rücksprung zur vorherigen Stelle | verschachtelte nav/NCX-Fixtures und Chromium-Pagination |
 | 15 | Laden-und-Öffnen in allen Tabs; letzte Öffnung separat; ausschließlich manueller Gelesen-Status; Zoom-Fokus, verschiebbarer Regler, gespeicherte Stufe und manuelle Ausschnittfolge | Reader- und Produktions-JavaScript-Tests |
 | 16 | minimierte Release-APK; derselbe permanente Schlüssel; direkte GitHub Releases und manuelle Updateprüfung; Room-Schemaexport und Migrationen 1/2/3 → 4; AGP 8.6.1 mit Navigation 2.8.9 und vorhandenem Gradle 8.9 (Lint-API-Kompatibilität) | CI: JVM/Android-Ressourcentests, Lint Release, Chromium, Build und Signierprüfungen |
 

@@ -26,7 +26,8 @@ class EpubTocTest {
     @Test fun comicImagesHaveNaturalOrderAndFixedViewport() {
         val root = java.nio.file.Files.createTempDirectory("cbz-test").toFile()
         try {
-            listOf("page10.png", "page2.png", "page1.png").forEach { File(root, it).writeBytes(ByteArray(0)) }
+            val png = java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=")
+            listOf("page10.png", "page2.png", "page1.png").forEach { File(root, it).writeBytes(png) }
             val comic = ComicArchiveParser.parse(root)
             assertEquals(3, comic.spine.size); assertTrue(File(comic.spine[0]).readText().contains("page1.png")); assertTrue(File(comic.spine[1]).readText().contains("page2.png"))
             assertTrue(File(comic.spine[0]).readText().contains("name=\"viewport\""))

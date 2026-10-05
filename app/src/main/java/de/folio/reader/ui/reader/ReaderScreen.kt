@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -110,7 +111,14 @@ fun ReaderScreen(
 
     var menuVisible by rememberSaveable { mutableStateOf(false) }
     var typographyVisible by remember { mutableStateOf(false) }
+    var bookmarkTitle by remember { mutableStateOf("") }
     var navigationVisible by remember { mutableStateOf(false) }
+    var externalLink by remember { mutableStateOf<String?>(null) }
+    val linkContext = androidx.compose.ui.platform.LocalContext.current
+    externalLink?.let { url -> androidx.compose.material3.AlertDialog(onDismissRequest = { externalLink = null },
+        title = { Text("Link im Browser öffnen?") }, text = { Text(Uri.parse(url).host.orEmpty()) },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { runCatching { linkContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }; externalLink = null }) { Text("Öffnen") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { externalLink = null }) { Text("Abbrechen") } }) }
     state.remotePosition?.let {
         androidx.compose.material3.AlertDialog(onDismissRequest = viewModel::dismissRemote,
             title = { Text("Auf anderem Gerät weitergelesen") }, text = { Text("Ein neuerer Lesestand ist verfügbar. Übernehmen?") },
@@ -126,12 +134,13 @@ fun ReaderScreen(
         val toc = remember(state.book?.tocJson) { org.json.JSONArray(state.book?.tocJson ?: "[]") }
         androidx.compose.material3.AlertDialog(onDismissRequest = { navigationVisible = false }, title = { Text("Inhalt und Lesezeichen") },
             text = { androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * .5f).dp)) {
-                item { androidx.compose.material3.TextButton(onClick = viewModel::addBookmark) { Text("Hier ein Lesezeichen setzen") } }
+                item { androidx.compose.material3.OutlinedTextField(value = bookmarkTitle, onValueChange = { bookmarkTitle = it.take(120) }, singleLine = true, label = { Text("Lesezeichenname (optional)") }) }
+                item { androidx.compose.material3.TextButton(onClick = { viewModel.addBookmark(bookmarkTitle); bookmarkTitle = "" }, enabled = state.linkedDocument == null) { Text("Hier ein Lesezeichen setzen") } }
                 item { androidx.compose.material3.TextButton(onClick = viewModel::setFinished) { Text(if (state.book?.progress?.finished == true) "Als ungelesen markieren" else "Als gelesen markieren") } }
                 item { if (state.returnPosition != null) androidx.compose.material3.TextButton(onClick = { viewModel.returnToPosition(); navigationVisible = false }) { Text("Zur vorherigen Lesestelle") } }
                 item { Text("Lesezeichen") }
-                items(state.bookmarks.size) { index -> val p = state.bookmarks[index]; Row {
-                    androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text("Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).roundToInt()} %") }
+                items(state.bookmarks.size) { index -> val bookmark = state.bookmarks[index]; val p = bookmark.position; Row {
+                    androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text(bookmark.title) }
                     androidx.compose.material3.TextButton(onClick = { viewModel.removeBookmark(index) }) { Text("×") }
                 } }
                 item { Text("Letzte Positionen") }
@@ -220,10 +229,10 @@ fun ReaderScreen(
             )
 
             else -> androidx.compose.runtime.key(book.id, state.layoutMode, state.restoreToken) { EpubWebView(
-                filePath = book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)],
+                filePath = state.linkedDocument ?: book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)],
                 bookRoot = viewModel.bookRoot(), initialZoom = state.zoom, onZoom = viewModel::setZoom,
-                fragment = state.fragment, onLink = viewModel::openLink,
-                fixedLayout = when (state.layoutMode) {
+                fragment = state.fragment, onLink = viewModel::openLink, onExternalLink = { externalLink = it },
+                fixedLayout = if (state.linkedDocument != null) false else when (state.layoutMode) {
                     de.folio.reader.domain.model.BookLayoutMode.ORIGINAL -> true
                     de.folio.reader.domain.model.BookLayoutMode.REFLOWABLE -> false
                     else -> state.layouts[book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)]]
@@ -387,7 +396,7 @@ private fun BottomOverlay(
 @Composable
 private fun EpubWebView(
     filePath: String,
-    bookRoot: File?, initialZoom: Float, onZoom: (Float) -> Unit, fragment: String, onLink: (String, String) -> Unit,
+    bookRoot: File?, initialZoom: Float, onZoom: (Float) -> Unit, fragment: String, onLink: (String, String) -> Unit, onExternalLink: (String) -> Unit,
     fixedLayout: Boolean?,
     restoreFraction: Float,
     restoreCharOffset: Int,
@@ -455,6 +464,7 @@ private fun EpubWebView(
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
                         val uri = request.url
+                        if (request.hasGesture() && uri.scheme in setOf("https", "http")) { onExternalLink(uri.toString()); return true }
                         val root = bookRoot ?: return true
                         if (uri.scheme == "file") runCatching {
                             val target = File(uri.path.orEmpty()).canonicalFile

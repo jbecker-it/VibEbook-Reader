@@ -62,4 +62,11 @@ class NextcloudTest {
         val b = a.copy(finished = true)
         assertEquals(ReadingProgress.merge(a, b), ReadingProgress.merge(b, a))
     }
+    @Test fun splitPropertyBlocksAreMerged() {
+        val path = settings.davUrl().encodedPath
+        val xml = """<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:response><d:href>$path/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+            <d:response><d:href>$path/a.epub</d:href><d:propstat><d:prop><d:resourcetype/><d:getetag>etag</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat><d:propstat><d:prop><oc:id>42</oc:id><d:getcontentlength>7</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"""
+        val entry = NextcloudClient.parseListing(xml, settings.davUrl(), settings.davUrl()).single()
+        assertEquals("42", entry.remoteId); assertEquals(7L, entry.size); assertEquals("etag", entry.etag)
+    }
 }
