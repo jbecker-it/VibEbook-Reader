@@ -21,7 +21,7 @@ Die Änderungen sind auf dem bestehenden Draft-PR #4. Main wird nicht automatisc
 | 13 | E-Ink ohne laufende Spinner/Navigationstransitionen; deckende Cover-Schalter mit Rand; Statusbereich mit fester Höhe | Geräteprüfung bleibt nötig |
 | 14 | EPUB-3-nav, EPUB-2-NCX, interne Links mit Fragmenten; Rücksprung zur vorherigen Stelle | verschachtelte nav/NCX-Fixtures und Chromium-Pagination |
 | 15 | Laden-und-Öffnen in allen Tabs; letzte Öffnung separat; ausschließlich manueller Gelesen-Status; Zoom-Fokus, verschiebbarer Regler, gespeicherte Stufe und manuelle Ausschnittfolge | Reader- und Produktions-JavaScript-Tests |
-| 16 | minimierte Release-APK; derselbe permanente Schlüssel; direkte GitHub Releases und manuelle Updateprüfung; Room-Schemaexport und Migrationen 1/2/3 → 4; AGP 8.7.3 passend zum vorhandenen Gradle 8.9 | CI: JVM/Android-Ressourcentests, Lint Release, Chromium, Build und Signierprüfungen |
+| 16 | minimierte Release-APK; derselbe permanente Schlüssel; direkte GitHub Releases und manuelle Updateprüfung; Room-Schemaexport und Migrationen 1/2/3 → 4; AGP 8.6.1 mit Navigation 2.8.9 und vorhandenem Gradle 8.9 (Lint-API-Kompatibilität) | CI: JVM/Android-Ressourcentests, Lint Release, Chromium, Build und Signierprüfungen |
 
 ## Weitere Bedienfunktionen
 
@@ -44,4 +44,6 @@ EPUB-/CBZ-Dateien können über die Android-Dateiauswahl oder „Öffnen mit“ 
 
 ## Prüfergebnis
 
-Wird nach Abschluss der CI im PR aktualisiert. Bis dahin sind neue Tests und Release-Build nicht als bestanden zu behandeln.
+Der erste Release-Durchlauf (Version 25, Commit ffe3b88799480a9d58fbe8908b5402d6a8ca90c1) bestand 43 Tests ohne Fehler oder übersprungene Fälle, Chromium-Regression, Release-Lint, minimierten Build, Signierprüfungen und direkte Release-Veröffentlichung. Die zuletzt ergänzten Lebenszyklus-/Störfalltests werden im abschließenden CI-Durchlauf zusätzlich geprüft; das finale Ergebnis steht im PR.
+
+Der Version-25-Lintbericht enthält drei übersprungene Navigation-Prüfungen. Navigation dokumentiert einen Fix ab 2.8.3 für AGP 8.4+ und weiterhin eine Inkompatibilität zu Lint 16/AGP 8.7. Die Abschlussversion verwendet daher Navigation 2.8.9 mit AGP 8.6.1; die Lint-Warnungen werden ausdrücklich erneut ausgewertet, statt die Checks zu deaktivieren. Andere Versionshinweise werden nicht pauschal als App-Defekt gewertet.

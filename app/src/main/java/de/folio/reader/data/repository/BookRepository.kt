@@ -174,7 +174,7 @@ class BookRepository @Inject constructor(
         require(displayName.endsWith(".epub", true) || displayName.endsWith(".cbz", true)) { "EPUB- oder CBZ-Datei auswählen." }
         cleanupRevisions()
         val budget = settingsRepo.storageBudgetMb.first() * 1024L * 1024L
-        val maxBytes = minOf(budget - storageBytes(), context.filesDir.usableSpace - 64L * 1024 * 1024).coerceAtLeast(0)
+        val maxBytes = minOf(budget - storageBytes(), freeSpace() - 64L * 1024 * 1024).coerceAtLeast(0)
         val tmp = File.createTempFile("import-", ".zip", context.cacheDir)
         var bookDir: File? = null
         try {
@@ -191,7 +191,7 @@ class BookRepository @Inject constructor(
             if (existing?.downloaded == true && existing.spineJson.toStringList().all { File(it).isFile }) return@withContext id
             val directory = File(booksDir, "$id-${java.util.UUID.randomUUID()}"); bookDir = directory
             val job = kotlin.coroutines.coroutineContext
-            epubParser.extract(tmp, directory, minOf(maxBytes, context.filesDir.usableSpace - 64L * 1024 * 1024)) { job.ensureActive() }
+            epubParser.extract(tmp, directory, minOf(maxBytes, freeSpace() - 64L * 1024 * 1024)) { job.ensureActive() }
             val parsed = epubParser.parse(directory)
             require(parsed.spine.isNotEmpty()) { "Datei enthält keine lesbaren Seiten." }
             bookDao.upsert(BookEntity(id, "Lokale Importe/$displayName", if (displayName.endsWith(".cbz", true)) displayName.substringBeforeLast('.') else parsed.title,
@@ -274,10 +274,10 @@ class BookRepository @Inject constructor(
         cleanupRevisions()
         val budget = settingsRepo.storageBudgetMb.first() * 1024L * 1024L
         require(storageBytes() + size <= budget) { "Offline-Speicherlimit erreicht. Lokale Kopien entfernen oder Limit erhöhen." }
-        require(context.filesDir.usableSpace > size + 64L * 1024 * 1024) { "Zu wenig freier Speicher für dieses Buch." }
+        require(freeSpace() > size + 64L * 1024 * 1024) { "Zu wenig freier Speicher für dieses Buch." }
         val remotePath = joinPath(settings.rootPath, libraryRel)
         val tmp = File(context.cacheDir, "$id.epub")
-        nextcloudClient.download(settings, remotePath, tmp, etag, minOf(budget - storageBytes(), context.filesDir.usableSpace - 64L * 1024 * 1024))
+        nextcloudClient.download(settings, remotePath, tmp, etag, minOf(budget - storageBytes(), freeSpace() - 64L * 1024 * 1024))
 
         // Versioned extraction keeps the currently readable copy intact until indexing succeeds.
         val bookDir = File(booksDir, "$id-${java.util.UUID.randomUUID()}")
@@ -285,7 +285,7 @@ class BookRepository @Inject constructor(
         val parsed = try {
             val digest = java.security.MessageDigest.getInstance("SHA-256")
             tmp.inputStream().use { input -> val buffer = ByteArray(65536); while (true) { val n = input.read(buffer); if (n < 0) break; digest.update(buffer, 0, n) } }
-            epubParser.extract(tmp, bookDir, minOf((budget - storageBytes()).coerceAtLeast(0), (context.filesDir.usableSpace - 64L * 1024 * 1024).coerceAtLeast(0))) { jobContext.ensureActive() }
+            epubParser.extract(tmp, bookDir, minOf((budget - storageBytes()).coerceAtLeast(0), (freeSpace() - 64L * 1024 * 1024).coerceAtLeast(0))) { jobContext.ensureActive() }
             File(bookDir, "folio-manifest.sha256").writeBytes(digest.digest())
             epubParser.parse(bookDir).also { require(it.spine.isNotEmpty()) { "EPUB enthält keine lesbaren Kapitel." } }
         } catch (e: Exception) { bookDir.deleteRecursively(); throw e
@@ -388,6 +388,9 @@ class BookRepository @Inject constructor(
     }
 
     // ---- Helpers ----------------------------------------------------------
+
+    // Conservative physical free space; no assumptions about reclaiming other apps' caches.
+    private fun freeSpace(): Long = android.os.StatFs(context.filesDir.path).availableBytes
 
     private fun progressFilePath(settings: NextcloudSettings, bookId: String): String =
         joinPath(settings.progressDir, "$bookId.json")
