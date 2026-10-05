@@ -217,6 +217,7 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
             await page.evaluate(() => __folio.layout());
             assert.equal(await page.evaluate(() => __folio.resumeWordRange().toString()),'Geräteübergreifend');
             assert.equal(await page.evaluate(() => __folio.anchor),wordAnchor);
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker').children.length),1,'Inline formatting must share one frame on the same line');
             assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('folio-resume-marker')).pointerEvents),'none');
             fs.mkdirSync('app/build/reports', {recursive:true});
             if (segmenter) await page.screenshot({path:'app/build/reports/reader-resume.png'});

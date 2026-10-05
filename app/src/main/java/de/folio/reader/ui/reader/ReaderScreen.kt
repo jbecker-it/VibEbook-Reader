@@ -792,6 +792,15 @@ internal fun buildInjection(
                 return r.width > 0 && r.height > 0 && r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight;
             }).map(function(r) { return [r.left, r.top, r.width, r.height].map(function(v) { return Math.round(v * 10) / 10; }); })
                 .filter(function(r, i, all) { return all.findIndex(function(other) { return other.join(',') === r.join(','); }) === i; }) : [];
+            var lines = [];
+            rects.forEach(function(r) {
+                var line = lines.find(function(b) { return Math.abs(b[1] - r[1]) <= 2 && Math.abs(b[3] - r[3]) <= 2 && r[0] <= b[0] + b[2] + 2 && r[0] + r[2] >= b[0] - 2; });
+                if (!line) { lines.push(r.slice()); return; }
+                var left = Math.min(line[0], r[0]), top = Math.min(line[1], r[1]);
+                var right = Math.max(line[0] + line[2], r[0] + r[2]), bottom = Math.max(line[1] + line[3], r[1] + r[3]);
+                line[0] = left; line[1] = top; line[2] = right - left; line[3] = bottom - top;
+            });
+            rects = lines;
             var key = JSON.stringify(['$textHex', rects]);
             var overlay = document.getElementById('folio-resume-marker');
             if (overlay && F.resumeMarkerKey === key) return;
