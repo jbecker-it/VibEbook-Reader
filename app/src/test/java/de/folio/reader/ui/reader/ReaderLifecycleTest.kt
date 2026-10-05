@@ -60,8 +60,22 @@ class ReaderLifecycleTest {
         val newer = ReadingProgress(id, 0, .6f, 60, 200, "other")
         progress.write(newer, false)
         val reopened = open(); assertEquals(60, reopened.first.state.value.restoreCharOffset)
+        assertTrue(reopened.first.state.value.showResumeMarker)
         reopened.first.onPosition(.6f, 60, false); reopened.first.saveNow(); delay(100)
-        assertEquals(newer, progress.read(id)); reopened.second.clear()
+        assertEquals(newer, progress.read(id)); assertTrue(reopened.first.state.value.showResumeMarker); reopened.second.clear()
+    }
+    @Test fun acceptingRemoteShowsMarkerAndDismissingDoesNotSavePosition() = runBlocking {
+        val previous = ReadingProgress(id, 0, .2f, 20, 100, "other")
+        progress.write(previous, false)
+        val opened = open(); val vm = opened.first
+        vm.dismissResumeMarker(); assertFalse(vm.state.value.showResumeMarker)
+        val newer = previous.copy(scrollFraction = .8f, charOffset = 80, updatedAt = 200)
+        progress.write(newer, false)
+        withTimeout(10000) { vm.state.first { it.remotePosition != null } }
+        vm.acceptRemote(); assertTrue(vm.state.value.showResumeMarker); assertEquals(80, vm.state.value.restoreCharOffset)
+        vm.dismissResumeMarker(); vm.saveNow(); delay(100)
+        assertFalse(vm.state.value.showResumeMarker); assertEquals(newer, progress.read(id))
+        opened.second.clear()
     }
     @Test fun rapidSavesKeepLatestUserNavigation() = runBlocking {
         val opened = open(); val vm = opened.first

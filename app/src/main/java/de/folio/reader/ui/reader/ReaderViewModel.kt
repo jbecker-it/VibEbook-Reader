@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
  data class ReaderUiState(
+    val showResumeMarker: Boolean = false,
     val linkedDocument: String? = null,
     val book: Book? = null, val spineIndex: Int = 0,
     val restoreScrollFraction: Float = 0f, val restoreCharOffset: Int = -1,
@@ -60,7 +61,7 @@ class ReaderViewModel @Inject constructor(
                     val editionChanged = saved?.contentRevision?.isNotBlank() == true && current != null && saved.contentRevision != current.contentRevision
                     val root = current?.let { bookRepository.extractionRoot(it) }
                     val indexByPath = if (saved?.chapterPath?.isNotBlank() == true && root != null && current != null) current.spine.indexOfFirst { java.io.File(it).relativeTo(root).invariantSeparatorsPath == saved.chapterPath } else -1
-                    _state.value = ReaderUiState(book = current?.copy(tocJson = bookRepository.navigation(current)), favorite = current?.favorite ?: false, loading = false,
+                    _state.value = ReaderUiState(showResumeMarker = (saved?.updatedAt ?: 0) > 0, book = current?.copy(tocJson = bookRepository.navigation(current)), favorite = current?.favorite ?: false, loading = false,
                         spineIndex = (if (indexByPath >= 0) indexByPath else saved?.spineIndex ?: 0).coerceIn(0, (current?.spine?.lastIndex ?: 0).coerceAtLeast(0)),
                         restoreScrollFraction = saved?.scrollFraction ?: 0f, chapterFraction = saved?.scrollFraction ?: 0f,
                         restoreCharOffset = if (editionChanged) -1 else saved?.charOffset ?: -1, editionChanged = editionChanged,
@@ -88,10 +89,11 @@ class ReaderViewModel @Inject constructor(
     fun acceptRemote() { val p = _state.value.remotePosition ?: return; restore(p, false); appliedPosition = p; _state.update { it.copy(remotePosition = null) } }
     fun dismissRemote() { appliedPosition = _state.value.remotePosition; _state.update { it.copy(remotePosition = null) } }
     fun clearError() { _state.update { it.copy(error = null, editionChanged = false) } }
+    fun dismissResumeMarker() { _state.update { it.copy(showResumeMarker = false) } }
     fun goToChapter(index: Int, restoreFraction: Float = 0f, fragment: String = "", rememberReturn: Boolean = false) {
         val book = _state.value.book ?: return
         if (book.spine.isEmpty()) return
-        _state.update { it.copy(linkedDocument = null, returnPosition = if (rememberReturn) displayPosition() else it.returnPosition, spineIndex = index.coerceIn(0, book.spine.lastIndex), restoreScrollFraction = restoreFraction,
+        _state.update { it.copy(showResumeMarker = false, linkedDocument = null, returnPosition = if (rememberReturn) displayPosition() else it.returnPosition, spineIndex = index.coerceIn(0, book.spine.lastIndex), restoreScrollFraction = restoreFraction,
             restoreCharOffset = -1, chapterFraction = restoreFraction, restoreToken = it.restoreToken + 1, fragment = fragment) }
         scheduleSave()
     }
@@ -102,7 +104,7 @@ class ReaderViewModel @Inject constructor(
         saveNow()
         val index = book.spine.indexOf(target.path)
         if (index >= 0) goToChapter(index, 0f, fragment, true)
-        else _state.update { it.copy(linkedDocument = target.path, returnPosition = displayPosition(), fragment = fragment,
+        else _state.update { it.copy(showResumeMarker = false, linkedDocument = target.path, returnPosition = displayPosition(), fragment = fragment,
             restoreScrollFraction = 0f, chapterFraction = 0f, restoreCharOffset = -1, restoreToken = it.restoreToken + 1) }
     }
     private fun displayPosition(): ReadingProgress? { val s = _state.value; if (s.linkedDocument != null) return s.returnPosition; val book = s.book ?: return null
@@ -112,7 +114,7 @@ class ReaderViewModel @Inject constructor(
     fun previousChapter() { if (_state.value.linkedDocument != null) { returnToPosition(); return }; if (_state.value.spineIndex > 0) goToChapter(_state.value.spineIndex - 1, 1f) }
     fun onPosition(fraction: Float, charOffset: Int, fromUser: Boolean) {
         if (!fraction.isFinite()) return
-        _state.update { it.copy(chapterFraction = fraction, restoreScrollFraction = fraction, restoreCharOffset = charOffset.coerceAtLeast(-1)) }
+        _state.update { it.copy(showResumeMarker = it.showResumeMarker && !fromUser, chapterFraction = fraction, restoreScrollFraction = fraction, restoreCharOffset = charOffset.coerceAtLeast(-1)) }
         if (fromUser && _state.value.linkedDocument == null) scheduleSave()
     }
     fun setReaderPreferences(value: ReaderPreferences) = action { settingsRepository.saveBookPreferences(id.value, value) }
@@ -127,7 +129,7 @@ class ReaderViewModel @Inject constructor(
         val book = _state.value.book ?: return
         val root = bookRepository.extractionRoot(book)
         val byPath = if (root != null && p.chapterPath.isNotBlank()) book.spine.indexOfFirst { java.io.File(it).relativeTo(root).invariantSeparatorsPath == p.chapterPath } else -1
-        _state.update { it.copy(linkedDocument = null, returnPosition = if (save) displayPosition() else it.returnPosition, spineIndex = (if (byPath >= 0) byPath else p.spineIndex).coerceIn(0, book.spine.lastIndex), restoreScrollFraction = p.scrollFraction, chapterFraction = p.scrollFraction,
+        _state.update { it.copy(showResumeMarker = !save, linkedDocument = null, returnPosition = if (save) displayPosition() else it.returnPosition, spineIndex = (if (byPath >= 0) byPath else p.spineIndex).coerceIn(0, book.spine.lastIndex), restoreScrollFraction = p.scrollFraction, chapterFraction = p.scrollFraction,
             restoreCharOffset = if (p.contentRevision.isNotBlank() && p.contentRevision != book.contentRevision) -1 else p.charOffset, fragment = "", restoreToken = it.restoreToken + 1) }
         if (save) scheduleSave()
     }

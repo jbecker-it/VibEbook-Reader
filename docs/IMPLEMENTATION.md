@@ -31,6 +31,8 @@ Nextcloud Login Flow v2 öffnet den normalen Browser, fragt einen kurzlebigen To
 
 EPUB-/CBZ-Dateien können über die Android-Dateiauswahl oder „Öffnen mit“ importiert werden. Lokale Importe bleiben ausdrücklich lokal und bekommen eine Inhaltsidentität. Backupexport/-import enthält Lesestände, Favoriten und Lesestatus, keine Zugangsdaten oder Signierschlüssel. Lesezeichen und Darstellungsoptionen sind derzeit lokale Einstellungen.
 
+Beim Wiederöffnen und beim Übernehmen eines neueren Gerätestands wird das gespeicherte Wort bis zum ersten Blättern mit einem ruhigen Rahmen und leichter grauer Hinterlegung markiert. Die Wortgrenzen berücksichtigen Unicode und Text über Inline-Elemente. Ein Overlay außerhalb des Buchtexts verändert weder Zeichenindex noch Umbruch oder Textauswahl. Unveränderte Layouts zeichnen es nicht erneut. Bildseiten und alte/ungültige Zeichenanker verwenden einen Seitenhinweis. Die reine Anzeige erzeugt keine neue Lesestand-Version und braucht kein zusätzliches Synchronisationsformat.
+
 ## Kompatibilität und Grenzen
 
 - Vorhandene `.folio-progress/<id>.json` bleiben unter ihrer ID verwendbar. Das zusätzliche `catalog.json` wird mit ETag/If-None-Match geschützt. Gemeinsame Dateiregister sind auf 10000 Einträge begrenzt. Server ohne `oc:id` verwenden weiterhin den Pfad; dann ist Umbenennung keine stabile Identität.

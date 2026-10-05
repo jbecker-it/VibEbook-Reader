@@ -18,8 +18,8 @@ function injection(fixed = null, options = {}) {
     return template.replace(/\$\{([^}]+)\}/g, (_, key) => {
         assert.ok(key in values, `Unknown Kotlin template value: ${key}`);
         return values[key];
-    }).replace(/\$(twoPage|smoothTurns|colorScheme|restoreCharOffset|frac)\b/g,
-        (_, key) => ({twoPage:String(options.twoPage ?? true),smoothTurns:'false',colorScheme:'dark',restoreCharOffset:String(options.anchor ?? -1),frac:String(options.fraction ?? 0)})[key]);
+    }).replace(/\$(twoPage|smoothTurns|colorScheme|restoreCharOffset|showResumeMarker|textHex|frac)\b/g,
+        (_, key) => ({twoPage:String(options.twoPage ?? true),smoothTurns:'false',colorScheme:'dark',restoreCharOffset:String(options.anchor ?? -1),showResumeMarker:String(options.marker ?? false),textHex:'#000000',frac:String(options.fraction ?? 0)})[key]);
 }
 const comic = `<!doctype html><html><head><meta name="viewport" content="width=1200,height=1800">
 <style>body{margin:0;width:1200px;height:1800px;background:white;font:40px sans-serif}
@@ -180,7 +180,65 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
         assert.ok(await page.evaluate(() => events.every(e=>e===false)));
         await page.evaluate(() => __folio.next());
         assert.equal(await page.evaluate(() => events.at(-1)),true);
+
+        // Cross-device resume: highlight the word containing the stored UTF-16 anchor,
+        // including inline markup, without changing the chapter text or native selection.
+        const markerBook = '<html><body><p>Ein Vorspann mit normalem Text.</p>'.repeat(1) +
+            '<p>Ein weiterer Absatz zur Bildschirmprüfung.</p>'.repeat(35) +
+            '<p id="resume">„Geräte<strong>übergreifend</strong>“ weiterlesen. Café und Wörter bleiben lesbar.</p>' +
+            '<p>Text nach der letzten Lesestelle.</p>'.repeat(100) + '</body></html>';
+        await page.setViewportSize({width:360,height:800});
+        await load(markerBook,false);
+        const wordAnchor = await page.evaluate(() => __folio.nodes.find(e=>e.node===document.getElementById('resume').firstChild).start + 3);
+        for (const segmenter of [true,false]) {
+            await page.goto('about:blank');
+            await page.setViewportSize({width:800,height:600});
+            await page.setContent(markerBook);
+            await page.evaluate(enabled => {
+                if (!enabled) Intl.Segmenter = undefined;
+                window.events=[]; window.dismissals=0;
+                window.AndroidReader={onPosition:(f,a,user)=>events.push(user),onResumeMarkerDismissed:()=>dismissals++};
+            },segmenter);
+            const textBefore = await page.evaluate(() => document.body.textContent);
+            await page.evaluate(injection(false,{anchor:wordAnchor,fontSize:24,twoPage:true,marker:true}));
+            await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => __folio.resumeWordRange().toString()),'Geräteübergreifend');
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker').getAttribute('aria-label')),'Letzte Lesestelle: Geräteübergreifend');
+            assert.equal(await page.evaluate(() => document.body.textContent),textBefore);
+            assert.equal(await page.evaluate(() => getSelection().isCollapsed),true);
+            assert.ok(await page.evaluate(() => events.every(e=>e===false)));
+            const sameOverlay = await page.evaluate(() => {
+                const overlay=document.getElementById('folio-resume-marker'); __folio.layout();
+                return overlay===document.getElementById('folio-resume-marker');
+            });
+            assert.equal(sameOverlay,true,'Unchanged layout must not redraw the marker');
+            await page.setViewportSize({width:400,height:900});
+            await page.evaluate(injection(false,{anchor:wordAnchor,fontSize:28,twoPage:false,marker:true}));
+            await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => __folio.resumeWordRange().toString()),'Geräteübergreifend');
+            assert.equal(await page.evaluate(() => __folio.anchor),wordAnchor);
+            assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('folio-resume-marker')).pointerEvents),'none');
+            fs.mkdirSync('app/build/reports', {recursive:true});
+            if (segmenter) await page.screenshot({path:'app/build/reports/reader-resume.png'});
+            await page.evaluate(() => __folio.next());
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null);
+            assert.equal(await page.evaluate(() => dismissals),1);
+            await page.evaluate(injection(false,{anchor:wordAnchor,marker:true}));
+            await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null,'Reinjection must not revive a dismissed marker');
+        }
+        // No false word for legacy anchors or image-only pages; badge stays outside the text index.
+        for (const [html,fixed] of [[comic,true],['<html><body><p>Alter Lesestand ohne Zeichenanker.</p></body></html>',false]]) {
+            await load(html,fixed);
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null,'Fresh book has no resume marker');
+            await page.goto('about:blank'); await page.setContent(html);
+            await page.evaluate(injection(fixed,{marker:true})); await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => document.querySelector('#folio-resume-marker').textContent),'Hier weiterlesen');
+            assert.equal(await page.evaluate(() => document.querySelector('#folio-resume-marker').parentElement===document.documentElement),true);
+            await page.evaluate(() => __folio.prev());
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null);
+        }
         assert.deepEqual(errors,[]);
-        console.log('Passed: layered comic scaling, phone/Go 6/landscape, reinjection, navigation, novel pagination.');
+        console.log('Passed: layered comic scaling, phone/Go 6/landscape, reinjection, navigation, novel pagination, cross-device resume markers.');
     } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode=1; });

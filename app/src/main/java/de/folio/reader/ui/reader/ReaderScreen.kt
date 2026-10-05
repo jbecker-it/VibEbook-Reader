@@ -239,6 +239,8 @@ fun ReaderScreen(
                 },
                 restoreFraction = state.restoreScrollFraction,
                 restoreCharOffset = state.restoreCharOffset,
+                showResumeMarker = state.showResumeMarker,
+                onDismissResumeMarker = viewModel::dismissResumeMarker,
                 twoPage = twoPage,
                 smoothTurns = !eInk,
                 backgroundHex = bgHex,
@@ -400,6 +402,8 @@ private fun EpubWebView(
     fixedLayout: Boolean?,
     restoreFraction: Float,
     restoreCharOffset: Int,
+    showResumeMarker: Boolean,
+    onDismissResumeMarker: () -> Unit,
     twoPage: Boolean,
     smoothTurns: Boolean,
     backgroundHex: String,
@@ -416,6 +420,7 @@ private fun EpubWebView(
     val bridge = remember { ReaderBridge(Handler(Looper.getMainLooper())).apply { zoomValue = initialZoom } }
     bridge.zoomListener = onZoom
     bridge.positionListener = onPosition
+    bridge.dismissResumeMarkerListener = onDismissResumeMarker
     bridge.documentUrl = Uri.fromFile(File(filePath)).toString()
     bridge.toggleMenuListener = onToggleMenu
     bridge.nextChapterListener = onNextChapter
@@ -435,7 +440,7 @@ private fun EpubWebView(
         restoreFraction, restoreCharOffset, twoPage, smoothTurns,
         backgroundHex, textHex, linkHex, forceColors,
         preferences,
-        fixedLayout, fragment,
+        fixedLayout, fragment, showResumeMarker,
     )
 
     // Layout-/Themewechsel ohne Neuladen anwenden: erneut injizieren – das
@@ -522,6 +527,7 @@ private class ReaderBridge(private val handler: Handler) {
     private fun isCurrentDocument(sourceUrl: String) =
         Uri.parse(sourceUrl).buildUpon().fragment(null).build().toString() == documentUrl
     var positionListener: (Float, Int, Boolean) -> Unit = { _, _, _ -> }
+    var dismissResumeMarkerListener: () -> Unit = {}
     @Volatile var zoomValue = 1f
     var zoomListener: (Float) -> Unit = {}
 
@@ -539,6 +545,11 @@ private class ReaderBridge(private val handler: Handler) {
         if (!fraction.isFinite()) return
         val f = fraction.coerceIn(0f, 1f)
         handler.post { if (isCurrentDocument(sourceUrl)) positionListener(f, charOffset, fromUser) }
+    }
+
+    @JavascriptInterface
+    fun onResumeMarkerDismissed(sourceUrl: String) {
+        handler.post { if (isCurrentDocument(sourceUrl)) dismissResumeMarkerListener() }
     }
 
     @JavascriptInterface
@@ -580,6 +591,7 @@ internal fun buildInjection(
     preferences: ReaderPreferences,
     fixedLayout: Boolean? = null,
     restoreFragment: String = "",
+    showResumeMarker: Boolean = false,
 ): String {
     val frac = restoreFraction.coerceIn(0f, 1f).toString()
     val colorRules = if (forceColors) {
@@ -608,6 +620,8 @@ internal fun buildInjection(
             F.fraction = $frac;          // Kapitel-Anteil 0..1 (Fallback)
             F.fragment = ${jsString(restoreFragment)};
             F.anchor = $restoreCharOffset; // Zeichen-Offset, -1 = keiner
+            F.resumeMarker = $showResumeMarker;
+            F.resumeOffset = F.anchor;
             F.screen = 0;
             F.screens = 1;
             F.step = 1;
@@ -717,6 +731,88 @@ internal fun buildInjection(
                 if (p >= page) { ans = mid; hi = mid - 1; } else { lo = mid + 1; }
             }
             return ans;
+        };
+
+        // A separate, noninteractive overlay leaves text nodes, pagination and selection intact.
+        F.clearResumeMarker = function() {
+            var wasVisible = F.resumeMarker;
+            F.resumeMarker = false; F.resumeMarkerKey = null;
+            var overlay = document.getElementById('folio-resume-marker');
+            if (overlay) overlay.remove();
+            if (wasVisible && window.AndroidReader && AndroidReader.onResumeMarkerDismissed)
+                AndroidReader.onResumeMarkerDismissed(location.href);
+        };
+        F.rangeBetweenOffsets = function(start, end) {
+            if (start < 0 || end > F.textLen || end <= start) return null;
+            var range = F.rangeAtOffset(start), last = F.rangeAtOffset(end - 1);
+            if (!range || !last) return null;
+            range.setEnd(last.endContainer, last.endOffset);
+            return range;
+        };
+        F.resumeWordRange = function() {
+            var offset = F.resumeOffset;
+            if (offset < 0 || offset >= F.textLen) return null;
+            var start = Math.max(0, offset - 128), end = Math.min(F.textLen, offset + 256);
+            var snippet = F.rangeBetweenOffsets(start, end);
+            if (!snippet) return null;
+            var text = snippet.toString(), words = [];
+            if (window.Intl && Intl.Segmenter) {
+                words = Array.from(new Intl.Segmenter(undefined, {granularity:'word'}).segment(text))
+                    .filter(function(part) { return part.isWordLike; });
+            } else {
+                var pattern;
+                try { pattern = new RegExp('[\\p{L}\\p{N}\\p{M}]+(?:[’\x27-][\\p{L}\\p{N}\\p{M}]+)*', 'gu'); }
+                catch (_) { pattern = /[^\s.,;:!?()\[\]«»„“”"']+/g; }
+                var match;
+                while ((match = pattern.exec(text))) words.push({index:match.index, segment:match[0]});
+            }
+            for (var word of words) {
+                var wordStart = start + word.index, wordEnd = wordStart + word.segment.length;
+                if (wordEnd <= offset) continue;
+                var range = F.rangeBetweenOffsets(wordStart, wordEnd);
+                if (!range) continue;
+                // Adjacent paragraphs need not have whitespace text nodes between them.
+                var at = F.rangeAtOffset(Math.max(offset, wordStart));
+                var block = at && at.startContainer.parentElement.closest('p,li,td,th,h1,h2,h3,h4,h5,h6,blockquote,figcaption,div,section');
+                if (block) {
+                    var bounds = document.createRange(); bounds.selectNodeContents(block);
+                    if (range.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) range.setStart(bounds.startContainer, bounds.startOffset);
+                    if (range.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) range.setEnd(bounds.endContainer, bounds.endOffset);
+                }
+                if (Array.from(range.getClientRects()).some(function(r) {
+                    return r.width > 0 && r.height > 0 && r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight;
+                })) return range;
+            }
+            return null;
+        };
+        F.paintResumeMarker = function() {
+            if (!F.resumeMarker) return;
+            var range = F.fixed ? null : F.resumeWordRange();
+            var rects = range ? Array.from(range.getClientRects()).filter(function(r) {
+                return r.width > 0 && r.height > 0 && r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight;
+            }).map(function(r) { return [r.left, r.top, r.width, r.height].map(function(v) { return Math.round(v * 10) / 10; }); })
+                .filter(function(r, i, all) { return all.findIndex(function(other) { return other.join(',') === r.join(','); }) === i; }) : [];
+            var key = JSON.stringify(['$textHex', rects]);
+            var overlay = document.getElementById('folio-resume-marker');
+            if (overlay && F.resumeMarkerKey === key) return;
+            if (overlay) overlay.remove();
+            overlay = document.createElement('div'); overlay.id = 'folio-resume-marker';
+            overlay.setAttribute('role', 'note');
+            overlay.setAttribute('aria-label', range ? 'Letzte Lesestelle: ' + range.toString() : 'Zuletzt gelesene Seite');
+            overlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646;';
+            if (rects.length) rects.forEach(function(r) {
+                var box = document.createElement('div'); box.setAttribute('aria-hidden', 'true');
+                box.style.cssText = 'position:absolute;box-sizing:border-box;outline:2px solid $textHex;background:rgba(128,128,128,.18);' +
+                    'left:' + r[0] + 'px;top:' + r[1] + 'px;width:' + r[2] + 'px;height:' + r[3] + 'px;';
+                overlay.appendChild(box);
+            });
+            else {
+                var label = document.createElement('div'); label.textContent = 'Hier weiterlesen';
+                label.style.cssText = 'position:absolute;top:12px;left:12px;padding:6px 10px;background:#fff;color:#000;border:2px solid #000;font:16px sans-serif;';
+                overlay.appendChild(label);
+            }
+            // Outside body: never include the badge in the chapter's text index or publisher transform.
+            document.documentElement.appendChild(overlay); F.resumeMarkerKey = key;
         };
 
         // ---- Layout / Pagination ------------------------------------------
@@ -845,6 +941,7 @@ internal fun buildInjection(
             F.screen = 0; F.screens = 1; F.step = W; F.anchor = -1;
             window.scrollTo(0, 0);
             F.zoomControls();
+            F.paintResumeMarker();
             if (window.AndroidReader) AndroidReader.onPosition(F.fraction, -1, false, location.href);
         };
 
@@ -899,6 +996,7 @@ internal fun buildInjection(
             F.screen = i;
             if (F.screens > 1) F.fraction = i / (F.screens - 1);
             if (fromUser) {
+                F.clearResumeMarker();
                 F.anchor = F.offsetForPage(i);
             }
             window.scrollTo({
@@ -906,12 +1004,14 @@ internal fun buildInjection(
                 top: 0,
                 behavior: (smooth && F.smoothTurns) ? 'smooth' : 'auto',
             });
+            F.paintResumeMarker();
             if (window.AndroidReader && AndroidReader.onPosition) {
                 AndroidReader.onPosition(F.fraction, F.anchor, fromUser, location.href);
             }
         };
 
         F.next = function() {
+            F.clearResumeMarker();
             if (F.screen < F.screens - 1) {
                 F.setScreen(F.screen + 1, true, true);
             } else {
@@ -924,6 +1024,7 @@ internal fun buildInjection(
         };
 
         F.prev = function() {
+            F.clearResumeMarker();
             if (F.screen > 0) {
                 F.setScreen(F.screen - 1, true, true);
             } else {
