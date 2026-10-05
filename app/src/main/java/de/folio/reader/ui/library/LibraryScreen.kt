@@ -83,7 +83,9 @@ fun LibraryScreen(
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val books by viewModel.books.collectAsStateWithLifecycle()
-    val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+    val workerStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+    val downloadTitle by viewModel.downloadTitle.collectAsStateWithLifecycle()
+    val syncStatus = if (downloadTitle != null) SyncStatus(running = true, message = "Lade „$downloadTitle“ …") else workerStatus
     val isConfigured by viewModel.isConfigured.collectAsStateWithLifecycle()
     val tab by viewModel.tab.collectAsStateWithLifecycle()
     val currentFolder by viewModel.currentFolder.collectAsStateWithLifecycle()

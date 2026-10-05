@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 enum class LibraryTab(val label: String) {
@@ -43,6 +44,9 @@ class LibraryViewModel @Inject constructor(
 ) : ViewModel() {
 
     val eInkMode = settingsRepository.eInkMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    private val downloads = mutableSetOf<String>()
+    private val downloadLock = kotlinx.coroutines.sync.Mutex()
+    private val _downloadTitle = MutableStateFlow<String?>(null); val downloadTitle = _downloadTitle.asStateFlow()
     private val _openedBook = MutableStateFlow<String?>(null); val openedBook = _openedBook.asStateFlow()
     fun consumedOpenedBook() { _openedBook.value = null }
     private val _query = MutableStateFlow(""); val query = _query.asStateFlow()
@@ -58,7 +62,7 @@ class LibraryViewModel @Inject constructor(
     private val mutationLock = kotlinx.coroutines.sync.Mutex()
     private var undo: (suspend () -> Unit)? = null
     private val _notice = MutableStateFlow<String?>(null); val notice = _notice.asStateFlow()
-    fun undoLast() { val action = undo ?: return; undo = null; runLibraryAction { action(); _notice.value = null } }
+    fun undoLast() { val action = undo ?: return; undo = null; runLibraryAction(serial = true) { action(); _notice.value = null } }
 
     val books: StateFlow<List<Book>> = bookRepository.observeBooks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -123,7 +127,16 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun downloadBook(id: String) {
-        runLibraryAction { bookRepository.downloadBook(id); _openedBook.value = id }
+        if (!downloads.add(id)) return
+        runLibraryAction {
+            try {
+                downloadLock.withLock {
+                    _downloadTitle.value = books.value.firstOrNull { it.id == id }?.title ?: "Buch"
+                    try { bookRepository.downloadBook(id); _openedBook.value = id }
+                    finally { _downloadTitle.value = null }
+                }
+            } finally { downloads.remove(id) }
+        }
     }
 
     private val _actionError = MutableStateFlow<String?>(null)
@@ -132,18 +145,18 @@ class LibraryViewModel @Inject constructor(
     fun removeMissingBook(id: String) = runLibraryAction { bookRepository.removeLocalCopy(id) }
     fun importBook(uri: android.net.Uri) = runLibraryAction { _openedBook.value = bookRepository.importLocal(uri) }
 
-    fun setFinished(id: String, finished: Boolean) = runLibraryAction { bookRepository.setFinished(id, finished); undo = { bookRepository.setFinished(id, !finished) }; _notice.value = if (finished) "Als gelesen markiert" else "Als ungelesen markiert" }
+    fun setFinished(id: String, finished: Boolean) = runLibraryAction(serial = true) { bookRepository.setFinished(id, finished); undo = { bookRepository.setFinished(id, !finished) }; _notice.value = if (finished) "Als gelesen markiert" else "Als ungelesen markiert" }
 
-    private fun runLibraryAction(block: suspend () -> Unit) {
+    private fun runLibraryAction(serial: Boolean = false, block: suspend () -> Unit) {
         viewModelScope.launch {
-            try { mutationLock.lock(); try { block(); _actionError.value = null } finally { mutationLock.unlock() } }
+            try { if (serial) mutationLock.lock(); try { block(); _actionError.value = null } finally { if (serial) mutationLock.unlock() } }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { _actionError.value = e.message ?: "Aktion fehlgeschlagen" }
         }
     }
 
     fun toggleFavorite(id: String) {
-        runLibraryAction { bookRepository.toggleFavorite(id); undo = { bookRepository.toggleFavorite(id) }; _notice.value = "Favorit geändert" }
+        runLibraryAction(serial = true) { bookRepository.toggleFavorite(id); undo = { bookRepository.toggleFavorite(id) }; _notice.value = "Favorit geändert" }
     }
 
     private fun buildBrowse(all: List<Book>, current: String): BrowseContent {

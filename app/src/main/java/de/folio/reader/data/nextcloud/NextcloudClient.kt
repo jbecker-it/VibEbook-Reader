@@ -71,6 +71,16 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
                     val body = response.body
                     val managed = if (body == null) response else response.newBuilder().body(object : okhttp3.ResponseBody() {
                         private val managedSource = object : okio.ForwardingSource(body.source()) {
+                            override fun read(sink: okio.Buffer, byteCount: Long): Long {
+                                job?.ensureActive()
+                                return try { super.read(sink, byteCount) }
+                                catch (e: IOException) {
+                                    // OkHttp interrupts a cancelled body with an I/O exception.
+                                    // Keep coroutine cancellation distinct from a server failure.
+                                    job?.ensureActive()
+                                    throw e
+                                }
+                            }
                             override fun close() { try { super.close() } finally { cancellation?.dispose() } }
                         }.buffer()
                         override fun contentType() = body.contentType()
