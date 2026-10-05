@@ -358,13 +358,14 @@ private fun EpubWebView(
     forceColors: Boolean,
     preferences: ReaderPreferences,
     menuVisible: Boolean,
-    onPosition: (Float, Int) -> Unit,
+    onPosition: (Float, Int, Boolean) -> Unit,
     onToggleMenu: () -> Unit,
     onNextChapter: () -> Unit,
     onPrevChapter: () -> Unit,
 ) {
     val bridge = remember { ReaderBridge(Handler(Looper.getMainLooper())) }
     bridge.positionListener = onPosition
+    bridge.documentUrl = Uri.fromFile(File(filePath)).toString()
     bridge.toggleMenuListener = onToggleMenu
     bridge.nextChapterListener = onNextChapter
     bridge.prevChapterListener = onPrevChapter
@@ -372,6 +373,7 @@ private fun EpubWebView(
     val webViewRef = remember { arrayOfNulls<WebView>(1) }
     DisposableEffect(Unit) {
         onDispose {
+            bridge.documentUrl = null
             webViewRef[0]?.apply { stopLoading(); removeJavascriptInterface("AndroidReader"); destroy() }
             webViewRef[0] = null
         }
@@ -455,15 +457,23 @@ private fun WebView.installReaderBridge(bridge: ReaderBridge) {
 
 /** Brücke vom WebView-JavaScript nach Kotlin (JS-Thread → Main-Thread). */
 private class ReaderBridge(private val handler: Handler) {
-    var positionListener: (Float, Int) -> Unit = { _, _ -> }
+    var documentUrl: String? = null
+    var positionListener: (Float, Int, Boolean) -> Unit = { _, _, _ -> }
+    @Volatile private var zoom = 1f
+
+    @JavascriptInterface
+    fun getZoom(): Float = zoom
+
+    @JavascriptInterface
+    fun setZoom(value: Float) { if (value.isFinite()) zoom = value.coerceIn(1f, 3f) }
     var toggleMenuListener: () -> Unit = {}
     var nextChapterListener: () -> Unit = {}
     var prevChapterListener: () -> Unit = {}
 
     @JavascriptInterface
-    fun onPosition(fraction: Float, charOffset: Int) {
+    fun onPosition(fraction: Float, charOffset: Int, fromUser: Boolean, sourceUrl: String) {
         val f = fraction.coerceIn(0f, 1f)
-        handler.post { positionListener(f, charOffset) }
+        handler.post { if (sourceUrl == documentUrl) positionListener(f, charOffset, fromUser) }
     }
 
     @JavascriptInterface
@@ -472,13 +482,13 @@ private class ReaderBridge(private val handler: Handler) {
     }
 
     @JavascriptInterface
-    fun onNextChapter() {
-        handler.post { nextChapterListener() }
+    fun onNextChapter(sourceUrl: String) {
+        handler.post { if (sourceUrl == documentUrl) nextChapterListener() }
     }
 
     @JavascriptInterface
-    fun onPrevChapter() {
-        handler.post { prevChapterListener() }
+    fun onPrevChapter(sourceUrl: String) {
+        handler.post { if (sourceUrl == documentUrl) prevChapterListener() }
     }
 }
 
@@ -535,6 +545,8 @@ internal fun buildInjection(
             F.screens = 1;
             F.step = 1;
             F.PH = 24;
+            F.zoom = window.AndroidReader && AndroidReader.getZoom ? AndroidReader.getZoom() : 1;
+            F.panX = 0; F.panY = 0;
         }
 
         if (firstRun) {
@@ -666,6 +678,49 @@ internal fun buildInjection(
                 F.colorRules;
         };
 
+        // High-contrast, discrete controls: no animated zoom or dragging needed on E-Ink.
+        F.changeZoom = function(delta) {
+            var levels = [1, 1.5, 2, 3];
+            var index = levels.indexOf(F.zoom);
+            F.zoom = levels[Math.max(0, Math.min(levels.length - 1, index + delta))];
+            F.panX = 0; F.panY = 0;
+            if (window.AndroidReader && AndroidReader.setZoom) AndroidReader.setZoom(F.zoom);
+            F.layout();
+        };
+        F.pan = function(dx, dy) {
+            F.panX += dx * window.innerWidth * 0.75;
+            F.panY += dy * window.innerHeight * 0.75;
+            F.layout();
+        };
+        F.zoomControls = function() {
+            var controls = document.getElementById('folio-zoom');
+            if (controls) controls.remove();
+            controls = document.createElement('div');
+            controls.id = 'folio-zoom';
+            controls.style.cssText = 'position:fixed;bottom:8px;left:8px;z-index:2147483647;display:flex;flex-wrap:wrap;max-width:240px;gap:4px;background:white;color:black;padding:4px;border:1px solid black;';
+            function button(text, label, action, disabled) {
+                var b = document.createElement('button');
+                b.textContent = text; b.setAttribute('aria-label', label); b.disabled = !!disabled;
+                b.style.cssText = 'min-width:48px;min-height:48px;font:18px sans-serif;color:black;background:white;border:1px solid black;touch-action:manipulation;';
+                b.onclick = function(e) { e.stopPropagation(); action(); };
+                controls.appendChild(b);
+            }
+            button(F.zoomOpen ? '×' : 'Zoom', F.zoomOpen ? 'Zoomregler schließen' : 'Zoomregler öffnen', function() { F.zoomOpen = !F.zoomOpen; F.zoomControls(); });
+            if (F.zoomOpen) {
+                button('−', 'Verkleinern', function() { F.changeZoom(-1); }, F.zoom === 1);
+                button(Math.round(F.zoom * 100) + '%', 'Ganze Seite anzeigen', function() { F.zoom = 1; F.changeZoom(0); });
+                button('+', 'Vergrößern', function() { F.changeZoom(1); }, F.zoom === 3);
+                if (F.zoom > 1) {
+                    button('←', 'Ausschnitt nach links', function() { F.pan(-1, 0); });
+                    button('↑', 'Ausschnitt nach oben', function() { F.pan(0, -1); });
+                    button('↓', 'Ausschnitt nach unten', function() { F.pan(0, 1); });
+                    button('→', 'Ausschnitt nach rechts', function() { F.pan(1, 0); });
+                }
+            }
+            // Sibling of body: never part of the publisher's transformed canvas or text index.
+            document.documentElement.appendChild(controls);
+        };
+
         // A fixed page is one canvas: preserve publisher CSS and scale every layer together.
         F.layoutFixed = function(W, H) {
             var body = document.body;
@@ -681,9 +736,11 @@ internal fun buildInjection(
                 }
                 if (!(F.pageWidth > 0 && F.pageHeight > 0)) return;
             }
-            var scale = Math.min(W / F.pageWidth, H / F.pageHeight);
-            var x = (W - F.pageWidth * scale) / 2;
-            var y = (H - F.pageHeight * scale) / 2;
+            var scale = Math.min(W / F.pageWidth, H / F.pageHeight) * F.zoom;
+            F.panX = Math.max(0, Math.min(Math.max(0, F.pageWidth * scale - W), F.panX));
+            F.panY = Math.max(0, Math.min(Math.max(0, F.pageHeight * scale - H), F.panY));
+            var x = F.pageWidth * scale <= W ? (W - F.pageWidth * scale) / 2 : -F.panX;
+            var y = F.pageHeight * scale <= H ? (H - F.pageHeight * scale) / 2 : -F.panY;
             var style = document.getElementById('folio-style');
             if (!style) {
                 style = document.createElement('style'); style.id = 'folio-style';
@@ -697,7 +754,8 @@ internal fun buildInjection(
                 '::-webkit-scrollbar{display:none;}';
             F.screen = 0; F.screens = 1; F.step = W; F.anchor = -1;
             window.scrollTo(0, 0);
-            if (window.AndroidReader) AndroidReader.onPosition(F.fraction, -1);
+            F.zoomControls();
+            if (window.AndroidReader) AndroidReader.onPosition(F.fraction, -1, false, location.href);
         };
 
         F.layout = function() {
@@ -755,7 +813,7 @@ internal fun buildInjection(
                 behavior: (smooth && F.smoothTurns) ? 'smooth' : 'auto',
             });
             if (window.AndroidReader && AndroidReader.onPosition) {
-                AndroidReader.onPosition(F.fraction, F.anchor);
+                AndroidReader.onPosition(F.fraction, F.anchor, fromUser, location.href);
             }
         };
 
@@ -765,8 +823,8 @@ internal fun buildInjection(
             } else {
                 F.fraction = 1;
                 if (window.AndroidReader) {
-                    AndroidReader.onPosition(1, F.anchor);
-                    AndroidReader.onNextChapter();
+                    AndroidReader.onPosition(1, F.anchor, true, location.href);
+                    AndroidReader.onNextChapter(location.href);
                 }
             }
         };
@@ -775,7 +833,7 @@ internal fun buildInjection(
             if (F.screen > 0) {
                 F.setScreen(F.screen - 1, true, true);
             } else {
-                if (window.AndroidReader) AndroidReader.onPrevChapter();
+                if (window.AndroidReader) AndroidReader.onPrevChapter(location.href);
             }
         };
 
@@ -785,6 +843,7 @@ internal fun buildInjection(
 
             document.addEventListener('click', function(e) {
                 var t = e.target;
+                if (t && t.closest && t.closest('#folio-zoom')) return;
                 if (t && t.closest && t.closest('a')) return; // Links normal folgen
                 var x = e.clientX / window.innerWidth;
                 if (Date.now() - (F.lastSwipe || 0) < 400) return;
@@ -795,12 +854,14 @@ internal fun buildInjection(
 
             var touchX = 0, touchY = 0, touchT = 0;
             document.addEventListener('touchstart', function(e) {
+                if (e.target.closest && e.target.closest('#folio-zoom')) { touchT = 0; return; }
                 if (e.touches.length !== 1) return;
                 touchX = e.touches[0].clientX;
                 touchY = e.touches[0].clientY;
                 touchT = Date.now();
             }, { passive: true });
             document.addEventListener('touchend', function(e) {
+                if (!touchT || (e.target.closest && e.target.closest('#folio-zoom'))) return;
                 var c = e.changedTouches[0];
                 if (!c) return;
                 var dx = c.clientX - touchX;
@@ -823,6 +884,7 @@ internal fun buildInjection(
             setTimeout(F.layout, 150);
             setTimeout(F.layout, 450);
             window.addEventListener('load', function() { F.layout(); });
+            if (document.fonts) document.fonts.ready.then(function() { F.layout(); });
         } else {
             F.layout();
         }

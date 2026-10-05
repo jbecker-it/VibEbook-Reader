@@ -65,6 +65,7 @@ class ReaderViewModel @Inject constructor(
     private var saveJob: Job? = null
     private var lastScrollFraction: Float = 0f
     private var lastCharOffset: Int = -1
+    private var positionChangedAt: Long? = null
 
     fun load(bookId: String) {
         if (loadedId == bookId) return
@@ -138,7 +139,7 @@ class ReaderViewModel @Inject constructor(
      * damit ein neu erzeugtes WebView (z.B. beim Auf-/Zuklappen eines
      * Foldables) an der aktuellen Seite weitermacht – nicht am Kapitelanfang.
      */
-    fun onPosition(fraction: Float, charOffset: Int) {
+    fun onPosition(fraction: Float, charOffset: Int, fromUser: Boolean) {
         lastScrollFraction = fraction
         lastCharOffset = charOffset
         _state.update {
@@ -148,7 +149,7 @@ class ReaderViewModel @Inject constructor(
                 restoreCharOffset = charOffset,
             )
         }
-        scheduleSave()
+        if (fromUser) scheduleSave()
     }
 
     fun setLayoutMode(mode: de.folio.reader.domain.model.BookLayoutMode) {
@@ -175,6 +176,7 @@ class ReaderViewModel @Inject constructor(
     }
 
     private fun scheduleSave() {
+        positionChangedAt = System.currentTimeMillis()
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
             delay(1_200) // debouncen – nicht bei jedem Blättern schreiben
@@ -183,6 +185,7 @@ class ReaderViewModel @Inject constructor(
     }
 
     private fun persist() {
+        val capturedAt = positionChangedAt ?: return
         val s = _state.value
         val book = s.book ?: return
         if (book.spine.isEmpty()) return
@@ -190,7 +193,7 @@ class ReaderViewModel @Inject constructor(
         val fraction = lastScrollFraction
         val anchor = lastCharOffset
         val finished = s.spineIndex >= book.spine.lastIndex && fraction > 0.98f
-        val capturedAt = System.currentTimeMillis()
+        positionChangedAt = null
         appScope.launch {
             bookRepository.saveProgress(
                 ReadingProgress(

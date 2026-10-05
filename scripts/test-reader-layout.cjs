@@ -4,13 +4,13 @@ const fs = require('node:fs');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('app/src/main/java/de/folio/reader/ui/reader/ReaderScreen.kt', 'utf8');
 const template = source.split('    return """')[1].split('    """.trimIndent()')[0];
-function injection(fixed = null) {
+function injection(fixed = null, options = {}) {
     const values = {
         'preferences.leftHanded': 'false',
         'if (preferences.wideTapZones) "0.4" else "0.3"': '0.4',
         'jsString(colorRules)': JSON.stringify('html,body{color:#000!important;background:#fff!important;}'),
         'fixedLayout?.toString() ?: "null"': String(fixed),
-        'preferences.margin': '24', 'preferences.fontSize': '32',
+        'preferences.margin': '24', 'preferences.fontSize': String(options.fontSize || 32),
         'if (preferences.sansSerif) "sans-serif" else "serif"': 'serif',
         'preferences.lineHeight': '2.2',
     };
@@ -18,7 +18,7 @@ function injection(fixed = null) {
         assert.ok(key in values, `Unknown Kotlin template value: ${key}`);
         return values[key];
     }).replace(/\$(twoPage|smoothTurns|colorScheme|restoreCharOffset|frac)\b/g,
-        (_, key) => ({twoPage:'true',smoothTurns:'false',colorScheme:'dark',restoreCharOffset:'-1',frac:'0'})[key]);
+        (_, key) => ({twoPage:String(options.twoPage ?? true),smoothTurns:'false',colorScheme:'dark',restoreCharOffset:String(options.anchor ?? -1),frac:String(options.fraction ?? 0)})[key]);
 }
 const comic = `<!doctype html><html><head><meta name="viewport" content="width=1200,height=1800">
 <style>body{margin:0;width:1200px;height:1800px;background:white;font:40px sans-serif}
@@ -120,6 +120,25 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
                 assert.equal(g.overflow,'visible');
             }
         }
+        // Zoom changes the whole publisher canvas, does not turn pages or mark progress as edited.
+        await page.setViewportSize({width:360,height:800});
+        await load(scaledComic,true);
+        await page.evaluate(() => {
+            window.events=[];
+            window.AndroidReader={onPosition:(f,a,user)=>events.push(user),onNextChapter:()=>events.push('next')};
+        });
+        await page.getByRole('button',{name:'Zoomregler öffnen',exact:true}).click();
+        await page.getByRole('button',{name:'Vergrößern',exact:true}).click();
+        assert.equal(await page.evaluate(() => __folio.zoom),1.5);
+        await page.getByRole('button',{name:'Vergrößern',exact:true}).click();
+        await page.getByRole('button',{name:'Ausschnitt nach rechts',exact:true}).click();
+        await page.getByRole('button',{name:'Ausschnitt nach unten',exact:true}).click();
+        assert.ok(await page.evaluate(() => __folio.panX>0 && __folio.panY>0));
+        assert.ok(await page.evaluate(() => events.every(e=>e===false)));
+        await page.getByRole('button',{name:'Ganze Seite anzeigen',exact:true}).click();
+        assert.equal(await page.evaluate(() => __folio.zoom),1);
+        assert.equal(await page.evaluate(() => __folio.panX+__folio.panY),0);
+
         // An ordinary inline image with prose must not trigger fixed-page detection.
         await load('<html><body><svg width="300" height="400"></svg><p>Ordinary prose</p></body></html>',null);
         assert.equal(await page.evaluate(() => __folio.fixed),false);
@@ -129,6 +148,27 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
         assert.ok(await page.evaluate(() => __folio.screens>1));
         await page.evaluate(() => __folio.next());
         assert.equal(await page.evaluate(() => __folio.screen),1);
+        const anchor = await page.evaluate(() => __folio.anchor);
+        assert.ok(anchor>0);
+        for (const [width,height,fontSize,twoPage] of [[1072,1448,22,true],[360,800,40,false],[800,360,28,true]]) {
+            await page.setViewportSize({width,height});
+            await page.evaluate(injection(false,{fontSize,twoPage}));
+            await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => __folio.anchor),anchor);
+            assert.equal(await page.evaluate(() => __folio.pageOfOffset(__folio.anchor)),await page.evaluate(() => __folio.screen));
+        }
+        const novel = await page.evaluate(() => document.body.innerHTML);
+        await page.goto('about:blank');
+        await page.setViewportSize({width:400,height:900});
+        await page.setContent('<html><body>'+novel+'</body></html>');
+        await page.evaluate(() => { window.events=[]; window.AndroidReader={onPosition:(f,a,user)=>events.push(user)}; });
+        await page.evaluate(injection(false,{anchor,fontSize:24,twoPage:false}));
+        await page.evaluate(() => __folio.layout());
+        assert.equal(await page.evaluate(() => __folio.anchor),anchor);
+        assert.equal(await page.evaluate(() => __folio.pageOfOffset(__folio.anchor)),await page.evaluate(() => __folio.screen));
+        assert.ok(await page.evaluate(() => events.every(e=>e===false)));
+        await page.evaluate(() => __folio.next());
+        assert.equal(await page.evaluate(() => events.at(-1)),true);
         assert.deepEqual(errors,[]);
         console.log('Passed: layered comic scaling, phone/Go 6/landscape, reinjection, navigation, novel pagination.');
     } finally { await browser.close(); }
