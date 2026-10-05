@@ -9,6 +9,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
+import androidx.work.workDataOf
 import androidx.work.WorkManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import de.folio.reader.data.progress.ProgressRepository
@@ -71,15 +72,16 @@ class SyncManager @Inject constructor(
     }
 
     init {
-        // Jede lokale Fortschrittsänderung möglichst zeitnah aufs Nextcloud bringen.
         scope.launch {
-            progressRepo.changes.collect { bookId ->
-                reportSync { bookRepository.syncProgress(bookId) }
+            progressRepo.readAll()
+            progressRepo.changes.collect {
+                if (progressRepo.pendingIds().isNotEmpty()) scheduleProgress(false)
             }
         }
         scope.launch {
             settingsRepo.wifiOnly.distinctUntilChanged().collect {
                 schedulePeriodic()
+                scheduleProgress(true)
                 // Includes queued work left by an older installation. Never interrupt an active download.
                 val infos = workManager.getWorkInfosForUniqueWork(WORK_ONE_TIME).get()
                 if (infos.any { it.state == WorkInfo.State.ENQUEUED } &&
@@ -120,6 +122,10 @@ class SyncManager @Inject constructor(
             if (!status.running && failure != null) {
                 status.copy(message = listOfNotNull(status.message?.takeUnless { it == failure }, failure).joinToString("\n"))
             } else status
+        }.combine(progressRepo.pendingCount) { status, count ->
+            if (!status.running && status.message == null) status.copy(message = if (count > 0) "Lokal gespeichert · $count Änderungen ausstehend" else "Lesestände synchronisiert") else status
+        }.combine(progressRepo.error) { status, error ->
+            if (error != null && !status.running) status.copy(message = error) else status
         }.combine(backgroundError) { status, error ->
             if (!status.running && status.message == null && error != null) status.copy(message = error) else status
         }
@@ -129,7 +135,20 @@ class SyncManager @Inject constructor(
      * Wird beim App-Start bzw. bei Rückkehr in den Vordergrund aufgerufen.
      */
     fun syncProgressNow() {
-        scope.launch { reportSync { bookRepository.syncAllProgress() } }
+        scope.launch { scheduleProgress(true) }
+    }
+
+    private suspend fun scheduleProgress(all: Boolean) {
+        val request = OneTimeWorkRequestBuilder<ProgressSyncWorker>()
+            .setInputData(workDataOf("all" to all))
+            .setConstraints(constraints(settingsRepo.wifiOnly.first()))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()
+        withContext(Dispatchers.IO) {
+            val infos = workManager.getWorkInfosForUniqueWork(WORK_PROGRESS).get()
+            // Keep at most one queued successor, so edits near the end of a running job cannot disappear.
+            if (infos.none { it.state == WorkInfo.State.ENQUEUED })
+                workManager.enqueueUniqueWork(WORK_PROGRESS, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        }
     }
 
     /** Sofortige, einmalige Synchronisierung. */
@@ -165,6 +184,7 @@ class SyncManager @Inject constructor(
         .build()
 
     companion object {
+        private const val WORK_PROGRESS = "folio_progress"
         private const val WORK_ONE_TIME = "folio_sync_now"
         private const val WORK_PERIODIC = "folio_sync_periodic"
     }

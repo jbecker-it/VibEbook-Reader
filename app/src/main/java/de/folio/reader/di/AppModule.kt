@@ -40,7 +40,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): FolioDatabase =
         Room.databaseBuilder(context, FolioDatabase::class.java, "folio.db")
-            .addMigrations(FolioDatabase.MIGRATION_1_2, FolioDatabase.MIGRATION_2_3)
+            .addMigrations(FolioDatabase.MIGRATION_1_2, FolioDatabase.MIGRATION_2_3, FolioDatabase.MIGRATION_3_4)
             .build()
 
     @Provides

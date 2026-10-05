@@ -20,7 +20,7 @@ class NextcloudTest {
     @Test fun parsesListingAndSkipsParent() {
         val path = settings.davUrl("Books").encodedPath
         val xml = """<d:multistatus xmlns:d="DAV:">
-          <d:response><d:href>$path/</d:href></d:response>
+          <d:response><d:href>$path/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
           <d:response><d:href>$path/A%20%2B%20B.epub</d:href><d:propstat><d:prop><d:resourcetype/><d:getcontentlength>42</d:getcontentlength><d:getetag>"abc"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
         </d:multistatus>"""
         val entries = NextcloudClient.parseListing(xml, settings.davUrl(), settings.davUrl("Books"))
@@ -43,5 +43,18 @@ class NextcloudTest {
     @Test fun pathIdentityIsStable() {
         assertEquals(BookId.fromPath("Books/Novel.epub"), BookId.fromPath("Books/Novel.epub"))
         assertNotEquals(BookId.fromPath("Books/Novel.epub"), BookId.fromPath("Books/Other.epub"))
+    }
+    @Test(expected = IllegalArgumentException::class) fun emptyMultistatusIsNotAnEmptyLibrary() {
+        NextcloudClient.parseListing("<d:multistatus xmlns:d=\"DAV:\"/>", settings.davUrl(), settings.davUrl())
+    }
+    @Test(expected = IllegalArgumentException::class) fun deniedRootIsNotSkipped() {
+        val path = settings.davUrl().encodedPath
+        NextcloudClient.parseListing("""<d:multistatus xmlns:d="DAV:"><d:response><d:href>$path</d:href><d:status>HTTP/1.1 403 Forbidden</d:status></d:response></d:multistatus>""", settings.davUrl(), settings.davUrl())
+    }
+    @Test fun equalTimestampsConvergeInBothOrders() {
+        val a = ReadingProgress("book", 1, .2f, updatedAt = 10, deviceId = "a", favorite = true, favoriteUpdatedAt = 10, favoriteDeviceId = "a")
+        val b = a.copy(spineIndex = 2, deviceId = "b", favorite = false, favoriteDeviceId = "b")
+        assertEquals(ReadingProgress.merge(a, b), ReadingProgress.merge(b, a))
+        assertEquals(ReadingProgress.merge(a, b), ReadingProgress.merge(ReadingProgress.merge(a, b), b))
     }
 }

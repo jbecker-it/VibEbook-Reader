@@ -21,6 +21,14 @@ data class Book(
     val progress: ReadingProgress?,
     val favorite: Boolean = false,
     val missingRemotely: Boolean = false,
+    val remoteId: String = "",
+    val contentRevision: String = "",
+    val tocJson: String = "[]",
+    val localOnly: Boolean = false,
+    val keepOffline: Boolean = true,
+    val lastOpenedAt: Long = 0,
+    val addedAt: Long = 0,
+    val downloadError: String = "",
 )
 
 /** Gesamtfortschritt 0..1 über alle Kapitel. */
@@ -34,11 +42,11 @@ val Book.readFraction: Float
 /** Fertig gelesen (Flag aus dem Fortschritt oder praktisch am Ende). */
 val Book.isFinished: Boolean
     get() = if ((progress?.finishedUpdatedAt ?: 0L) > 0L) progress?.finished == true
-        else progress?.finished == true || readFraction >= 0.98f
+        else progress?.finished == true
 
 /** Bereits angefangen (für den Tab „Lese ich"). */
 val Book.isStarted: Boolean
-    get() = (progress?.spineIndex ?: 0) > 0 || (progress?.scrollFraction ?: 0f) > 0.01f
+    get() = lastOpenedAt > 0 || (progress?.updatedAt ?: 0) > 0 || (progress?.spineIndex ?: 0) > 0 || (progress?.scrollFraction ?: 0f) > 0.01f
 
 /** Ordner des Buches relativ zur Bibliothek ("" = Wurzel). */
 val Book.folder: String

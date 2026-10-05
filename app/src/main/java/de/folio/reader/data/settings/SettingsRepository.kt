@@ -14,6 +14,7 @@ import de.folio.reader.domain.model.ReaderPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.util.UUID
@@ -79,6 +80,13 @@ class SettingsRepository @Inject constructor(
     }
 
     val wifiOnly: Flow<Boolean> = context.dataStore.data.map { it[Keys.WIFI_ONLY] ?: true }
+    val libraryBound = context.dataStore.data.map { it[Keys.LIBRARY_BOUND] ?: false }
+    val autoDownload = context.dataStore.data.map { it[booleanPreferencesKey("auto_download")] ?: true }
+    val storageBudgetMb = context.dataStore.data.map { (it[intPreferencesKey("storage_budget_mb")] ?: 2048).coerceIn(128, 16384) }
+    val nativeFavorites = context.dataStore.data.map { it[booleanPreferencesKey("native_favorites")] ?: false }
+    suspend fun setAutoDownload(value: Boolean) { context.dataStore.edit { it[booleanPreferencesKey("auto_download")] = value } }
+    suspend fun setStorageBudgetMb(value: Int) { context.dataStore.edit { it[intPreferencesKey("storage_budget_mb")] = value.coerceIn(128, 16384) } }
+    suspend fun setNativeFavorites(value: Boolean) { context.dataStore.edit { it[booleanPreferencesKey("native_favorites")] = value } }
 
     /** E-Ink-Modus: Blättern und Menü ohne Animationen. */
     val eInkMode: Flow<Boolean> = context.dataStore.data.map { it[Keys.EINK] ?: false }
@@ -96,6 +104,36 @@ class SettingsRepository @Inject constructor(
             keepScreenOn = p[booleanPreferencesKey("keep_screen_on")] ?: false,
         )
     }
+
+    fun bookPreferences(id: String): Flow<ReaderPreferences> = readerPreferences.combine(context.dataStore.data) { defaults, p ->
+        defaults.copy(fontSize = p[intPreferencesKey("book_font_$id")] ?: defaults.fontSize,
+            sansSerif = p[booleanPreferencesKey("book_sans_$id")] ?: defaults.sansSerif,
+            margin = p[intPreferencesKey("book_margin_$id")] ?: defaults.margin,
+            lineHeight = p[floatPreferencesKey("book_line_$id")] ?: defaults.lineHeight)
+    }
+    suspend fun saveBookPreferences(id: String, s: ReaderPreferences) { context.dataStore.edit { p ->
+        p[intPreferencesKey("book_font_$id")] = s.fontSize.coerceIn(14, 40)
+        p[booleanPreferencesKey("book_sans_$id")] = s.sansSerif
+        p[intPreferencesKey("book_margin_$id")] = s.margin.coerceIn(8, 48)
+        p[floatPreferencesKey("book_line_$id")] = s.lineHeight.coerceIn(1.2f, 2.2f)
+    } }
+    suspend fun bookZoom(id: String) = context.dataStore.data.first()[floatPreferencesKey("book_zoom_$id")] ?: 1f
+    suspend fun setBookZoom(id: String, zoom: Float) { context.dataStore.edit { it[floatPreferencesKey("book_zoom_$id")] = zoom.coerceIn(1f, 3f) } }
+    suspend fun libraryLocation(): Pair<String, String> { val p = context.dataStore.data.first(); return (p[stringPreferencesKey("library_tab")] ?: "BROWSE") to (p[stringPreferencesKey("library_folder")] ?: "") }
+    suspend fun saveLibraryLocation(tab: String, folder: String) { context.dataStore.edit { it[stringPreferencesKey("library_tab")] = tab; it[stringPreferencesKey("library_folder")] = folder } }
+    suspend fun bookmarks(id: String): List<de.folio.reader.domain.model.ReadingProgress> {
+        val arr = org.json.JSONArray(context.dataStore.data.first()[stringPreferencesKey("bookmarks_$id")] ?: "[]")
+        return (0 until arr.length()).map { de.folio.reader.domain.model.ReadingProgress.fromJson(arr.getJSONObject(it).toString()) }
+    }
+    suspend fun addBookmark(progress: de.folio.reader.domain.model.ReadingProgress) { context.dataStore.edit { p ->
+        val key = stringPreferencesKey("bookmarks_${progress.bookId}")
+        val arr = org.json.JSONArray(p[key] ?: "[]")
+        require(arr.length() < 200) { "Maximal 200 Lesezeichen pro Buch." }
+        arr.put(org.json.JSONObject(progress.toJson())); p[key] = arr.toString()
+    } }
+    suspend fun removeBookmark(id: String, index: Int) { context.dataStore.edit { p ->
+        val key = stringPreferencesKey("bookmarks_$id"); val arr = org.json.JSONArray(p[key] ?: "[]"); arr.remove(index); p[key] = arr.toString()
+    } }
 
     suspend fun saveReaderPreferences(s: ReaderPreferences) {
         context.dataStore.edit { p ->
@@ -118,7 +156,7 @@ class SettingsRepository @Inject constructor(
         val previous = currentNextcloudSettings()
         if (context.dataStore.data.first()[Keys.LIBRARY_BOUND] == true) {
             require(previous.serverUrl.trimEnd('/') == s.serverUrl.trim().trimEnd('/') &&
-                previous.username == s.username.trim() && previous.rootPath.trim('/') == s.rootPath.trim('/')) {
+                previous.username == s.username.trim() && previous.rootPath.trim('/') == s.rootPath.trim('/') && previous.progressDir.trim('/') == s.progressDir.trim('/')) {
                 "Diese Installation ist an eine Bibliothek gebunden. Server, Benutzer und Bücherordner können nicht ohne Datenmigration gewechselt werden. Das App-Passwort kann erneuert werden."
             }
         }

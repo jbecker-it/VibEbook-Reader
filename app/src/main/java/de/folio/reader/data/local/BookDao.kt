@@ -19,6 +19,21 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE id = :id")
     suspend fun getById(id: String): BookEntity?
 
+    @Query("SELECT * FROM books WHERE remoteId = :remoteId AND remoteId != '' LIMIT 1")
+    suspend fun getByRemoteId(remoteId: String): BookEntity?
+
+    @Query("UPDATE books SET lastOpenedAt = :time WHERE id = :id")
+    suspend fun opened(id: String, time: Long)
+
+    @Query("UPDATE books SET keepOffline = :keep WHERE id = :id")
+    suspend fun setKeepOffline(id: String, keep: Boolean)
+
+    @Query("UPDATE books SET downloaded = 0, spineJson = '[]', coverPath = NULL, keepOffline = 0 WHERE id = :id")
+    suspend fun clearDownload(id: String)
+
+    @Query("UPDATE books SET downloadError = :error WHERE id = :id")
+    suspend fun setDownloadError(id: String, error: String)
+
     @Query("SELECT * FROM books")
     suspend fun getAll(): List<BookEntity>
 

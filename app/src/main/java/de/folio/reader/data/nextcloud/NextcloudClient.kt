@@ -4,8 +4,11 @@ import de.folio.reader.domain.model.NextcloudSettings
 import de.folio.reader.domain.model.ReadingProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.Job
+import org.json.JSONObject
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okio.buffer
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Credentials
@@ -25,7 +28,7 @@ import org.xml.sax.InputSource
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resumeWithException
 
-data class RemoteEntry(val relativePath: String, val directory: Boolean, val size: Long, val etag: String)
+data class RemoteEntry(val relativePath: String, val directory: Boolean, val size: Long, val etag: String, val remoteId: String = "", val favorite: Boolean = false)
 data class RemoteText(val content: String, val etag: String?)
 class DavException(val status: Int, operation: String = "WebDAV") : IOException("$operation (HTTP $status): " + when (status) {
     401 -> "Anmeldung fehlgeschlagen. Benutzername und App-Passwort prüfen."
@@ -43,18 +46,31 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
 
     private suspend fun execute(settings: NextcloudSettings, path: String, method: String,
         body: String? = null, headers: Map<String, String> = emptyMap()): Response {
+        val job = coroutineContext[Job]
         val request = Request.Builder().url(settings.davUrl(path))
             .header("Authorization", Credentials.basic(settings.username.trim(), settings.password, Charsets.UTF_8))
-            .method(method, body?.toRequestBody((if (method == "PROPFIND") "application/xml; charset=utf-8" else "application/json; charset=utf-8").toMediaType()))
+            .method(method, body?.toRequestBody((if (method in listOf("PROPFIND", "PROPPATCH")) "application/xml; charset=utf-8" else "application/json; charset=utf-8").toMediaType()))
         headers.forEach { (key, value) -> request.header(key, value) }
         return suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request.build())
+            @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
+            val cancellation = job?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause -> if (cause != null) call.cancel() }
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) { if (continuation.isActive) continuation.resumeWithException(e) }
+                override fun onFailure(call: Call, e: IOException) { cancellation?.dispose(); if (continuation.isActive) continuation.resumeWithException(e) }
+                @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
                 override fun onResponse(call: Call, response: Response) {
-                    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-                    continuation.resume(response) { response.close() }
+                    val body = response.body
+                    val managed = if (body == null) response else response.newBuilder().body(object : okhttp3.ResponseBody() {
+                        private val managedSource = object : okio.ForwardingSource(body.source()) {
+                            override fun close() { try { super.close() } finally { cancellation?.dispose() } }
+                        }.buffer()
+                        override fun contentType() = body.contentType()
+                        override fun contentLength() = body.contentLength()
+                        override fun source() = managedSource
+                    }).build()
+                    if (body == null) cancellation?.dispose()
+                    continuation.resume(managed) { managed.close() }
                 }
             })
         }
@@ -62,11 +78,22 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
 
     suspend fun testConnection(settings: NextcloudSettings): Result<Unit> = try {
         list(settings, settings.rootPath)
+        val probe = settings.progressDir.trim('/') + "/.folio-probe-" + java.util.UUID.randomUUID() + ".json"
+        val payload = "{\"folioProbe\":true}"
+        var created = false
+        try {
+            writeText(settings, probe, payload, null); created = true
+            require(readTextOrNull(settings, probe)?.content == payload) { "Fortschrittsordner konnte nicht zurückgelesen werden." }
+        } finally {
+            if (created) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                execute(settings, probe, "DELETE").use { require(it.code in listOf(200, 204, 404)) { "Testdatei konnte nicht entfernt werden." } }
+            }
+        }
         Result.success(Unit)
     } catch (e: kotlinx.coroutines.CancellationException) { throw e
     } catch (e: Exception) { Result.failure(e) }
 
-    private suspend fun list(settings: NextcloudSettings, path: String): List<RemoteEntry> = withContext(Dispatchers.IO) {
+    suspend fun list(settings: NextcloudSettings, path: String): List<RemoteEntry> = withContext(Dispatchers.IO) {
         execute(settings, path, "PROPFIND", PROPERTIES, mapOf("Depth" to "1")).use { response ->
             if (response.code != 207) throw DavException(response.code, "Ordner lesen / PROPFIND")
             val xml = response.body?.byteStream()?.use { readLimited(it, MAX_XML) } ?: throw IOException("Leere Ordnerantwort.")
@@ -86,24 +113,28 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
             for (entry in list(settings, folder)) {
                 if (entry.directory) {
                     if (!entry.relativePath.substringAfterLast('/').startsWith('.') && entry.relativePath != settings.progressDir.trim('/')) pending.add(entry.relativePath)
-                } else if (entry.relativePath.endsWith(".epub", true)) books += entry
+                } else if (entry.relativePath.endsWith(".epub", true) || entry.relativePath.endsWith(".cbz", true)) books += entry
             }
         }
         return books
     }
 
-    suspend fun download(settings: NextcloudSettings, path: String, target: File, etag: String = "") = withContext(Dispatchers.IO) {
+    suspend fun download(settings: NextcloudSettings, path: String, target: File, etag: String = "", maxBytes: Long = 1024L * 1024 * 1024) = withContext(Dispatchers.IO) {
         val temporary = File.createTempFile("download-", ".part", target.parentFile)
         try {
             execute(settings, path, "GET", headers = if (etag.isBlank()) emptyMap() else mapOf("If-Match" to etag)).use { response ->
                 if (response.code != 200) throw DavException(response.code, "Buch laden / GET")
                 val body = response.body ?: throw IOException("Leere Buchantwort.")
+                require(body.contentLength() <= maxBytes) { "Buch überschreitet das Offline-Speicherlimit." }
                 body.byteStream().use { input -> temporary.outputStream().use { output ->
                     val buffer = ByteArray(65536)
+                    var total = 0L
                     while (true) {
                         coroutineContext.ensureActive()
                         val count = input.read(buffer)
                         if (count < 0) break
+                        total += count
+                        require(total <= maxBytes) { "Buch überschreitet das Offline-Speicherlimit." }
                         output.write(buffer, 0, count)
                     }
                 } }
@@ -113,7 +144,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
         } finally { temporary.delete() }
     }
 
-    suspend fun readTextOrNull(settings: NextcloudSettings, path: String): RemoteText? = withContext(Dispatchers.IO) {
+    suspend fun readTextOrNull(settings: NextcloudSettings, path: String, limit: Int = 65536): RemoteText? = withContext(Dispatchers.IO) {
         // Compression proxies can alter ETags; conditional PUT needs the identity representation.
         // Revalidate even cached 404s, especially after a failed create (If-None-Match: *).
         execute(settings, path, "GET", headers = mapOf(
@@ -122,9 +153,41 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
             if (response.code == 404) return@withContext null
             if (response.code != 200) throw DavException(response.code, "Fortschritt lesen / GET")
             val content = response.body?.byteStream()?.use { input ->
-                readLimited(input, 65536)
+                readLimited(input, limit)
             } ?: throw IOException("Leere Fortschrittsdatei.")
             RemoteText(content, response.header("ETag"))
+        }
+    }
+
+    /** Server file IDs map to the legacy public progress IDs across devices and renames. */
+    suspend fun bookRegistry(settings: NextcloudSettings, discovered: Map<String, String>): Map<String, String> {
+        if (discovered.isEmpty()) return emptyMap()
+        val path = settings.progressDir.trim('/') + "/catalog.json"
+        repeat(5) { attempt ->
+            val previous = readTextOrNull(settings, path, 2 * 1024 * 1024)
+            val json = previous?.let { JSONObject(it.content) } ?: JSONObject().put("schema", 1).put("books", JSONObject())
+            require(json.optInt("schema") == 1) { "Unbekanntes Bibliotheksregister." }
+            val books = json.getJSONObject("books")
+            require(books.length() <= 10000) { "Bibliotheksregister zu groß." }
+            discovered.forEach { (remoteId, id) -> if (!books.has(remoteId)) books.put(remoteId, id) }
+            val result = books.keys().asSequence().associateWith { key -> books.getString(key).also { require(it.matches(Regex("[a-f0-9]{32}"))) { "Ungültige Buch-ID im Register." } } }
+            if (previous != null && JSONObject(previous.content).getJSONObject("books").toString() == books.toString()) return result
+            try { writeText(settings, path, json.toString(), previous); return result }
+            catch (e: DavException) { if (e.status != 412 || attempt == 4) throw e }
+        }
+        error("Unreachable")
+    }
+
+    suspend fun setFavorite(settings: NextcloudSettings, path: String, favorite: Boolean) = withContext(Dispatchers.IO) {
+        val xml = """<?xml version="1.0"?><d:propertyupdate xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:set><d:prop><oc:favorite>${if (favorite) 1 else 0}</oc:favorite></d:prop></d:set></d:propertyupdate>"""
+        execute(settings, path, "PROPPATCH", xml).use { response ->
+            if (response.code != 207) throw DavException(response.code, "Nextcloud-Favorit speichern")
+            val text = response.body?.byteStream()?.use { readLimited(it, MAX_XML) }.orEmpty()
+            require(!text.contains("<!DOCTYPE", true) && !text.contains("<!ENTITY", true))
+            val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true; isExpandEntityReferences = false }
+            val doc = factory.newDocumentBuilder().parse(InputSource(StringReader(text)))
+            val ps = doc.getElementsByTagNameNS("DAV:", "propstat")
+            require((0 until ps.length).any { i -> val p = ps.item(i) as Element; p.getElementsByTagNameNS("http://owncloud.org/ns", "favorite").length > 0 && p.getElementsByTagNameNS("DAV:", "status").item(0)?.textContent?.split(' ')?.getOrNull(1) == "200" }) { "Nextcloud-Favoriten werden vom Server nicht unterstützt." }
         }
     }
 
@@ -134,6 +197,8 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
         repeat(3) { attempt ->
             val remoteFile = readTextOrNull(settings, path)
             val remote = remoteFile?.let { ReadingProgress.fromJson(it.content) }
+            val now = System.currentTimeMillis()
+            require(remote == null || listOf(remote.updatedAt, remote.favoriteUpdatedAt, remote.finishedUpdatedAt).all { it <= now + 86400000 }) { "Lesestand liegt in der Zukunft. Gerätezeit auf beiden Geräten prüfen." }
             require(remote == null || remote.bookId == bookId) { "Fortschrittsdatei gehört zu einem anderen Buch." }
             val local = readLocal()
             require(local == null || local.bookId == bookId) { "Lokaler Fortschritt gehört zu einem anderen Buch." }
@@ -178,7 +243,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
             }
             return output.toString("UTF-8")
         }
-        private const val PROPERTIES = """<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getetag/></d:prop></d:propfind>"""
+        private const val PROPERTIES = """<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop><d:resourcetype/><d:getcontentlength/><d:getetag/><oc:id/><oc:favorite/></d:prop></d:propfind>"""
 
         internal fun parseListing(xml: String, base: HttpUrl, requested: HttpUrl): List<RemoteEntry> {
             require(!xml.contains("<!DOCTYPE", true) && !xml.contains("<!ENTITY", true)) { "Unsichere XML-Antwort." }
@@ -191,7 +256,9 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
             val responses = document.getElementsByTagNameNS("DAV:", "response")
             val baseSegments = base.pathSegments.filter { it.isNotEmpty() }
             val requestedSegments = requested.pathSegments.filter { it.isNotEmpty() }
-            return (0 until responses.length).mapNotNull { index ->
+            require(responses.length > 0) { "Unvollständige WebDAV-Antwort." }
+            var foundRoot = false
+            val entries = (0 until responses.length).mapNotNull { index ->
                 val item = responses.item(index) as Element
                 fun text(element: Element, name: String) = element.getElementsByTagNameNS("DAV:", name).item(0)?.textContent
                 val href = text(item, "href") ?: throw IOException("WebDAV-Pfad fehlt.")
@@ -199,18 +266,30 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
                 require(url.scheme == base.scheme && url.host == base.host && url.port == base.port) { "Fremder WebDAV-Server in Antwort." }
                 val segments = url.pathSegments.filter { it.isNotEmpty() }
                 require(segments.none { '/' in it || '\\' in it }) { "Mehrdeutiger WebDAV-Pfad." }
-                if (segments == requestedSegments) return@mapNotNull null
+                if (segments == requestedSegments) {
+                    val status = text(item, "status")
+                    require(status == null || status.split(' ').getOrNull(1) == "200") { "Bibliotheksordner nicht lesbar." }
+                    val ps = item.getElementsByTagNameNS("DAV:", "propstat")
+                    require((0 until ps.length).any { text(ps.item(it) as Element, "status")?.split(' ')?.getOrNull(1) == "200" }) { "Bibliotheksordner nicht vollständig lesbar." }
+                    foundRoot = true
+                    return@mapNotNull null
+                }
                 require(segments.take(requestedSegments.size) == requestedSegments && segments.size == requestedSegments.size + 1) { "WebDAV-Antwort außerhalb des angefragten Ordners." }
                 require(segments.take(baseSegments.size) == baseSegments) { "Ungültiger WebDAV-Pfad." }
                 val propstats = item.getElementsByTagNameNS("DAV:", "propstat")
-                val props = (0 until propstats.length).map { propstats.item(it) as Element }
-                    .firstOrNull { text(it, "status")?.split(' ')?.getOrNull(1) == "200" }
-                    ?: throw IOException("Ordner unvollständig oder nicht lesbar.")
+                val successful = (0 until propstats.length).map { propstats.item(it) as Element }.filter { text(it, "status")?.split(' ')?.getOrNull(1) == "200" }
+                require(successful.isNotEmpty()) { "Ordner unvollständig oder nicht lesbar." }
+                val props = item.ownerDocument.createElement("properties")
+                successful.forEach { props.appendChild(it.cloneNode(true)) }
                 val relative = segments.drop(baseSegments.size).joinToString("/")
                 NextcloudSettings.segments(relative)
                 RemoteEntry(relative, props.getElementsByTagNameNS("DAV:", "collection").length > 0,
-                    text(props, "getcontentlength")?.toLongOrNull() ?: 0, text(props, "getetag").orEmpty())
+                    text(props, "getcontentlength")?.toLongOrNull() ?: 0, text(props, "getetag").orEmpty(),
+                    props.getElementsByTagNameNS("http://owncloud.org/ns", "id").item(0)?.textContent.orEmpty(),
+                    props.getElementsByTagNameNS("http://owncloud.org/ns", "favorite").item(0)?.textContent == "1")
             }
+            require(foundRoot) { "Bibliotheksordner fehlt in WebDAV-Antwort." }
+            return entries
         }
     }
 }

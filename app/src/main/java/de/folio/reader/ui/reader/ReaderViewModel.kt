@@ -6,206 +6,139 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import de.folio.reader.data.repository.BookRepository
 import de.folio.reader.data.settings.SettingsRepository
 import de.folio.reader.di.ApplicationScope
-import de.folio.reader.domain.model.Book
-import de.folio.reader.domain.model.PageLayoutMode
-import de.folio.reader.domain.model.ReadingProgress
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
+import de.folio.reader.domain.model.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
-data class ReaderUiState(
-    val book: Book? = null,
-    val spineIndex: Int = 0,
-    /** Beim Laden des Kapitels wiederherzustellende Position als Anteil (0..1). */
-    val restoreScrollFraction: Float = 0f,
-    /** Wortgenauer Anker (Zeichen-Offset im Kapiteltext); -1 = keiner. */
-    val restoreCharOffset: Int = -1,
-    /** Live-Position im aktuellen Kapitel (0..1) – für die Prozentanzeige. */
-    val chapterFraction: Float = 0f,
-    val favorite: Boolean = false,
-    val loading: Boolean = true,
-    val layouts: Map<String, Boolean> = emptyMap(),
-    val layoutMode: de.folio.reader.domain.model.BookLayoutMode = de.folio.reader.domain.model.BookLayoutMode.AUTO,
+ data class ReaderUiState(
+    val book: Book? = null, val spineIndex: Int = 0,
+    val restoreScrollFraction: Float = 0f, val restoreCharOffset: Int = -1,
+    val chapterFraction: Float = 0f, val favorite: Boolean = false, val loading: Boolean = true,
+    val layouts: Map<String, Boolean> = emptyMap(), val layoutMode: BookLayoutMode = BookLayoutMode.AUTO,
+    val error: String? = null, val remotePosition: ReadingProgress? = null,
+    val editionChanged: Boolean = false, val restoreToken: Long = 0, val fragment: String = "",
+    val zoom: Float = 1f, val history: List<ReadingProgress> = emptyList(), val bookmarks: List<ReadingProgress> = emptyList(),
 )
 
 @HiltViewModel
 class ReaderViewModel @Inject constructor(
-    private val bookRepository: BookRepository,
-    private val settingsRepository: SettingsRepository,
+    private val bookRepository: BookRepository, private val settingsRepository: SettingsRepository,
     @ApplicationScope private val appScope: CoroutineScope,
 ) : ViewModel() {
-    val readerPreferences = settingsRepository.readerPreferences
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), de.folio.reader.domain.model.ReaderPreferences())
-    fun setReaderPreferences(value: de.folio.reader.domain.model.ReaderPreferences) {
-        viewModelScope.launch { settingsRepository.saveReaderPreferences(value) }
-    }
-
+    private val id = MutableStateFlow("")
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val readerPreferences = id.flatMapLatest { if (it.isBlank()) settingsRepository.readerPreferences else settingsRepository.bookPreferences(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReaderPreferences())
+    val pageLayout = settingsRepository.pageLayout.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PageLayoutMode.AUTO)
+    val eInkMode = settingsRepository.eInkMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
     private val _state = MutableStateFlow(ReaderUiState())
-    val state: StateFlow<ReaderUiState> = _state.asStateFlow()
-
-    /** Ein- oder zweiseitiges Layout (aus den Einstellungen). */
-    val pageLayout: StateFlow<PageLayoutMode> = settingsRepository.pageLayout
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PageLayoutMode.AUTO)
-
-    /** E-Ink-Modus: keine Blätter-/Menü-Animationen. */
-    val eInkMode: StateFlow<Boolean> = settingsRepository.eInkMode
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    private var loadedId: String? = null
+    val state = _state.asStateFlow()
+    private var observeJob: Job? = null
     private var saveJob: Job? = null
-    private var lastScrollFraction: Float = 0f
-    private var lastCharOffset: Int = -1
-    private var positionChangedAt: Long? = null
+    private var release: (() -> Unit)? = null
+    private var changedAt: Long? = null
+    private var generation = 0L
+    private val saveLock = Mutex()
+    private var appliedPosition: ReadingProgress? = null
 
     fun load(bookId: String) {
-        if (loadedId == bookId) return
-        loadedId = bookId
-        _state.value = ReaderUiState(loading = true)
-        viewModelScope.launch {
-            // Vor dem Öffnen einmal mit dem Nextcloud abgleichen, um den neuesten Stand
-            // zu holen – aber begrenzt, damit ein nicht erreichbares Nextcloud das
-            // Öffnen nicht blockiert.
-            runCatching {
-                withTimeoutOrNull(5_000) { bookRepository.syncProgress(bookId) }
-            }
-            val book = bookRepository.observeBook(bookId).first()
-            val saved = book?.progress
-            val maxIndex = ((book?.spine?.size ?: 1) - 1).coerceAtLeast(0)
-            val restore = saved?.scrollFraction ?: 0f
-            val anchor = saved?.charOffset ?: -1
-            _state.value = ReaderUiState(
-                book = book,
-                spineIndex = (saved?.spineIndex ?: 0).coerceIn(0, maxIndex),
-                restoreScrollFraction = restore,
-                restoreCharOffset = anchor,
-                chapterFraction = restore,
-                favorite = book?.favorite ?: false,
-                loading = false,
-                layouts = book?.let { bookRepository.readLayouts(it) } ?: emptyMap(),
-                layoutMode = settingsRepository.bookLayout(bookId).first(),
-            )
-            lastScrollFraction = restore
-            lastCharOffset = anchor
+        if (id.value == bookId && observeJob != null) return
+        id.value = bookId
+        observeJob = viewModelScope.launch {
+            var initialized = false
+            try { bookRepository.observeBook(bookId).collect { current ->
+                if (!initialized) {
+                    initialized = true
+                    val saved = current?.progress
+                    val editionChanged = saved?.contentRevision?.isNotBlank() == true && current != null && saved.contentRevision != current.contentRevision
+                    val root = current?.let { bookRepository.extractionRoot(it) }
+                    val indexByPath = if (saved?.chapterPath?.isNotBlank() == true && root != null) current.spine.indexOfFirst { java.io.File(it).relativeTo(root).invariantSeparatorsPath == saved.chapterPath } else -1
+                    _state.value = ReaderUiState(book = current, favorite = current?.favorite ?: false, loading = false,
+                        spineIndex = (if (indexByPath >= 0) indexByPath else saved?.spineIndex ?: 0).coerceIn(0, (current?.spine?.lastIndex ?: 0).coerceAtLeast(0)),
+                        restoreScrollFraction = saved?.scrollFraction ?: 0f, chapterFraction = saved?.scrollFraction ?: 0f,
+                        restoreCharOffset = if (editionChanged) -1 else saved?.charOffset ?: -1, editionChanged = editionChanged,
+                        layouts = current?.let { bookRepository.readLayouts(it) }.orEmpty(),
+                        layoutMode = settingsRepository.bookLayout(bookId).first(), zoom = settingsRepository.bookZoom(bookId))
+                    appliedPosition = saved
+                    current?.let { release = bookRepository.retain(it); bookRepository.opened(it.id) }
+                    refreshNavigation()
+                    refreshRemote()
+                } else if (current != null) {
+                    // Keep an opened extraction alive when a newer edition downloads in the background.
+                    val opened = _state.value.book
+                    _state.update { it.copy(book = if (opened != null) current.copy(spine = opened.spine, contentRevision = opened.contentRevision, tocJson = opened.tocJson) else current, favorite = current.favorite) }
+                    val incoming = current.progress
+                    if (incoming != null && incoming.deviceId != settingsRepository.deviceId() && incoming.updatedAt > (appliedPosition?.updatedAt ?: 0)) {
+                        _state.update { it.copy(remotePosition = incoming) }
+                    }
+                }
+            } } catch (e: CancellationException) { throw e } catch (e: Exception) { _state.update { it.copy(loading = false, error = e.message) } }
         }
+        observeJob?.invokeOnCompletion { cause -> if (cause != null && cause !is CancellationException) _state.update { it.copy(loading = false, error = cause.message) } }
     }
-
-    /**
-     * [restoreFraction]: 0 = Kapitelanfang, 1 = Kapitelende (Rückwärtsblättern).
-     * Bei Kapitelwechseln gibt es keinen sinnvollen Zeichen-Anker → -1.
-     */
-    fun goToChapter(index: Int, restoreFraction: Float = 0f) {
+    fun bookRoot() = _state.value.book?.let { bookRepository.extractionRoot(it) }
+    fun refreshRemote() { action { withTimeoutOrNull(5_000) { bookRepository.syncProgress(id.value) } } }
+    fun acceptRemote() { val p = _state.value.remotePosition ?: return; restore(p, false); appliedPosition = p; _state.update { it.copy(remotePosition = null) } }
+    fun dismissRemote() { appliedPosition = _state.value.remotePosition; _state.update { it.copy(remotePosition = null) } }
+    fun clearError() { _state.update { it.copy(error = null, editionChanged = false) } }
+    fun goToChapter(index: Int, restoreFraction: Float = 0f, fragment: String = "") {
         val book = _state.value.book ?: return
         if (book.spine.isEmpty()) return
-        val clamped = index.coerceIn(0, book.spine.size - 1)
-        if (clamped == _state.value.spineIndex &&
-            restoreFraction == _state.value.restoreScrollFraction
-        ) return
-        lastScrollFraction = restoreFraction
-        lastCharOffset = -1
-        _state.update {
-            it.copy(
-                spineIndex = clamped,
-                restoreScrollFraction = restoreFraction,
-                restoreCharOffset = -1,
-                chapterFraction = restoreFraction,
-            )
-        }
+        _state.update { it.copy(spineIndex = index.coerceIn(0, book.spine.lastIndex), restoreScrollFraction = restoreFraction,
+            restoreCharOffset = -1, chapterFraction = restoreFraction, restoreToken = it.restoreToken + 1, fragment = fragment) }
         scheduleSave()
     }
-
-    fun nextChapter() {
-        val s = _state.value
-        if (s.spineIndex < (s.book?.spine?.lastIndex ?: 0)) goToChapter(s.spineIndex + 1, 0f)
-    }
-
-    /** Rückwärts über die Kapitelgrenze: ans Ende des vorherigen Kapitels springen. */
-    fun previousChapter() {
-        if (_state.value.spineIndex > 0) goToChapter(_state.value.spineIndex - 1, 1f)
-    }
-
-    /**
-     * Vom WebView gemeldete Position: Anteil im Kapitel plus wortgenauer
-     * Zeichen-Anker der aktuellen Seite. Die Restore-Felder werden mitgeführt,
-     * damit ein neu erzeugtes WebView (z.B. beim Auf-/Zuklappen eines
-     * Foldables) an der aktuellen Seite weitermacht – nicht am Kapitelanfang.
-     */
+    fun openLink(path: String, fragment: String) { val index = _state.value.book?.spine?.indexOf(path) ?: -1; if (index >= 0) goToChapter(index, 0f, fragment) }
+    fun nextChapter() { val s = _state.value; if (s.spineIndex < (s.book?.spine?.lastIndex ?: 0)) goToChapter(s.spineIndex + 1) }
+    fun previousChapter() { if (_state.value.spineIndex > 0) goToChapter(_state.value.spineIndex - 1, 1f) }
     fun onPosition(fraction: Float, charOffset: Int, fromUser: Boolean) {
-        lastScrollFraction = fraction
-        lastCharOffset = charOffset
-        _state.update {
-            it.copy(
-                chapterFraction = fraction,
-                restoreScrollFraction = fraction,
-                restoreCharOffset = charOffset,
-            )
-        }
+        if (!fraction.isFinite()) return
+        _state.update { it.copy(chapterFraction = fraction, restoreScrollFraction = fraction, restoreCharOffset = charOffset.coerceAtLeast(-1)) }
         if (fromUser) scheduleSave()
     }
-
-    fun setLayoutMode(mode: de.folio.reader.domain.model.BookLayoutMode) {
-        val id = loadedId ?: return
-        _state.update { it.copy(layoutMode = mode) }
-        viewModelScope.launch { settingsRepository.setBookLayout(id, mode) }
-    }
-
-    fun toggleFavorite() {
+    fun setReaderPreferences(value: ReaderPreferences) = action { settingsRepository.saveBookPreferences(id.value, value) }
+    fun setZoom(value: Float) { _state.update { it.copy(zoom = value) }; action { settingsRepository.setBookZoom(id.value, value) } }
+    fun setLayoutMode(mode: BookLayoutMode) { _state.update { it.copy(layoutMode = mode) }; action { settingsRepository.setBookLayout(id.value, mode) } }
+    fun toggleFavorite() = action { bookRepository.toggleFavorite(id.value) }
+    fun setFinished() = action { bookRepository.setFinished(id.value, _state.value.book?.progress?.finished != true) }
+    fun refreshNavigation() = action { val history = bookRepository.history(id.value); val marks = settingsRepository.bookmarks(id.value); _state.update { it.copy(history = history, bookmarks = marks) } }
+    fun addBookmark() = action { snapshot(System.currentTimeMillis())?.let { settingsRepository.addBookmark(it) }; refreshNavigation() }
+    fun removeBookmark(index: Int) = action { settingsRepository.removeBookmark(id.value, index); refreshNavigation() }
+    fun restore(p: ReadingProgress, save: Boolean = true) {
         val book = _state.value.book ?: return
-        _state.update { it.copy(favorite = !it.favorite) }
-        viewModelScope.launch { bookRepository.toggleFavorite(book.id) }
+        _state.update { it.copy(spineIndex = p.spineIndex.coerceIn(0, book.spine.lastIndex), restoreScrollFraction = p.scrollFraction, chapterFraction = p.scrollFraction,
+            restoreCharOffset = if (p.contentRevision.isNotBlank() && p.contentRevision != book.contentRevision) -1 else p.charOffset, fragment = "", restoreToken = it.restoreToken + 1) }
+        if (save) scheduleSave()
     }
-
-    /**
-     * Sofort speichern – beim Verlassen des Readers und bei ON_STOP (App in
-     * den Hintergrund, Display gewechselt). Läuft im App-Scope, damit der
-     * Schreibvorgang das Aufräumen des ViewModels überlebt – sonst geht die
-     * Position beim schnellen Schließen verloren.
-     */
-    fun saveNow() {
-        saveJob?.cancel()
-        persist()
+    fun saveNow() { saveJob?.cancel(); persist() }
+    private fun scheduleSave() { generation++; changedAt = System.currentTimeMillis(); saveJob?.cancel(); saveJob = viewModelScope.launch { delay(800); persist() } }
+    private suspend fun snapshot(at: Long): ReadingProgress? {
+        val s = _state.value; val book = s.book ?: return null; if (book.spine.isEmpty()) return null
+        val root = bookRepository.extractionRoot(book)
+        return ReadingProgress(book.id, s.spineIndex, s.restoreScrollFraction, s.restoreCharOffset, at, settingsRepository.deviceId(),
+            finished = book.progress?.finished ?: false, contentRevision = book.contentRevision,
+            chapterPath = root?.let { java.io.File(book.spine[s.spineIndex]).relativeTo(it).invariantSeparatorsPath }.orEmpty())
     }
-
-    private fun scheduleSave() {
-        positionChangedAt = System.currentTimeMillis()
-        saveJob?.cancel()
-        saveJob = viewModelScope.launch {
-            delay(1_200) // debouncen – nicht bei jedem Blättern schreiben
-            persist()
-        }
-    }
-
     private fun persist() {
-        val capturedAt = positionChangedAt ?: return
-        val s = _state.value
-        val book = s.book ?: return
-        if (book.spine.isEmpty()) return
-        // Werte jetzt festhalten – der Schreibvorgang läuft asynchron weiter.
-        val fraction = lastScrollFraction
-        val anchor = lastCharOffset
-        val finished = s.spineIndex >= book.spine.lastIndex && fraction > 0.98f
-        positionChangedAt = null
-        appScope.launch {
-            bookRepository.saveProgress(
-                ReadingProgress(
-                    bookId = book.id,
-                    spineIndex = s.spineIndex,
-                    scrollFraction = fraction,
-                    charOffset = anchor,
-                    updatedAt = capturedAt,
-                    deviceId = settingsRepository.deviceId(),
-                    finished = finished,
-                )
-            )
-        }
+        val at = changedAt ?: return; val capturedGeneration = generation
+        // Capture the screen synchronously; later turns must not change this write's position.
+        val captured = _state.value
+        appScope.launch { saveLock.withLock {
+            if (changedAt == null && capturedGeneration == generation) return@withLock
+            try {
+                val book = captured.book ?: return@withLock
+                val root = bookRepository.extractionRoot(book)
+                val p = ReadingProgress(book.id, captured.spineIndex, captured.restoreScrollFraction, captured.restoreCharOffset, at, settingsRepository.deviceId(),
+                    finished = book.progress?.finished ?: false, contentRevision = book.contentRevision,
+                    chapterPath = root?.let { java.io.File(book.spine[captured.spineIndex]).relativeTo(it).invariantSeparatorsPath }.orEmpty())
+                bookRepository.saveProgress(p); appliedPosition = p
+                if (generation == capturedGeneration) changedAt = null
+            } catch (e: CancellationException) { throw e } catch (e: Exception) { _state.update { it.copy(error = "Lesestand konnte nicht gespeichert werden: ${e.message}") } }
+        } }
     }
+    private fun action(block: suspend () -> Unit) { viewModelScope.launch { try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { _state.update { it.copy(error = e.message ?: "Aktion fehlgeschlagen") } } } }
+    override fun onCleared() { saveNow(); release?.invoke(); super.onCleared() }
 }

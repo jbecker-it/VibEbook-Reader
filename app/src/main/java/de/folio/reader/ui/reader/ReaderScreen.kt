@@ -43,6 +43,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -87,7 +88,7 @@ import kotlin.math.roundToInt
 fun ReaderScreen(
     bookId: String,
     onBack: () -> Unit,
-    viewModel: ReaderViewModel = hiltViewModel(key = bookId),
+    viewModel: ReaderViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(bookId) { viewModel.load(bookId) }
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -109,6 +110,38 @@ fun ReaderScreen(
 
     var menuVisible by rememberSaveable { mutableStateOf(false) }
     var typographyVisible by remember { mutableStateOf(false) }
+    var navigationVisible by remember { mutableStateOf(false) }
+    state.remotePosition?.let {
+        androidx.compose.material3.AlertDialog(onDismissRequest = viewModel::dismissRemote,
+            title = { Text("Auf anderem Gerät weitergelesen") }, text = { Text("Ein neuerer Lesestand ist verfügbar. Übernehmen?") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = viewModel::acceptRemote) { Text("Übernehmen") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = viewModel::dismissRemote) { Text("Hier bleiben") } })
+    }
+    if (state.error != null || state.editionChanged) {
+        androidx.compose.material3.AlertDialog(onDismissRequest = viewModel::clearError, title = { Text(if (state.error != null) "Hinweis" else "Neue Buchfassung") },
+            text = { Text(state.error ?: "Die Datei wurde ersetzt. Der Stand wird über Kapitel und Prozent wiederhergestellt; bitte die genaue Stelle prüfen.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.saveNow(); viewModel.clearError() }) { Text("OK") } })
+    }
+    if (navigationVisible) {
+        androidx.compose.material3.AlertDialog(onDismissRequest = { navigationVisible = false }, title = { Text("Inhalt und Lesezeichen") },
+            text = { Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                androidx.compose.material3.TextButton(onClick = viewModel::addBookmark) { Text("Hier ein Lesezeichen setzen") }
+                androidx.compose.material3.TextButton(onClick = viewModel::setFinished) { Text(if (state.book?.progress?.finished == true) "Als ungelesen markieren" else "Als gelesen markieren") }
+                Text("Lesezeichen")
+                state.bookmarks.forEachIndexed { index, p -> Row {
+                    androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text("Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).roundToInt()} %") }
+                    androidx.compose.material3.TextButton(onClick = { viewModel.removeBookmark(index) }) { Text("×") }
+                } }
+                Text("Letzte Positionen")
+                state.history.take(10).forEach { p -> androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text("Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).roundToInt()} %") } }
+                Text("Inhaltsverzeichnis")
+                val toc = org.json.JSONArray(state.book?.tocJson ?: "[]")
+                if (toc.length() == 0) state.book?.spine?.forEachIndexed { i, _ -> androidx.compose.material3.TextButton(onClick = { viewModel.goToChapter(i); navigationVisible = false }) { Text("Kapitel ${i + 1}") } }
+                for (i in 0 until toc.length()) { val item = toc.getJSONObject(i)
+                    androidx.compose.material3.TextButton(onClick = { viewModel.openLink(item.getString("path"), item.optString("fragment")); navigationVisible = false }) { Text("  ".repeat(item.optInt("depth").coerceIn(0, 8)) + item.getString("label")) }
+                }
+            } }, confirmButton = { androidx.compose.material3.TextButton(onClick = { navigationVisible = false }) { Text("Schließen") } })
+    }
     if (typographyVisible) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { typographyVisible = false },
@@ -143,6 +176,7 @@ fun ReaderScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) viewModel.saveNow()
+            if (event == Lifecycle.Event.ON_START) viewModel.refreshRemote()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -184,8 +218,10 @@ fun ReaderScreen(
                 color = colorScheme.onSurfaceVariant,
             )
 
-            else -> androidx.compose.runtime.key(book.id, state.layoutMode) { EpubWebView(
+            else -> androidx.compose.runtime.key(book.id, state.layoutMode, state.restoreToken) { EpubWebView(
                 filePath = book.spine[state.spineIndex.coerceIn(0, book.spine.lastIndex)],
+                bookRoot = viewModel.bookRoot(), initialZoom = state.zoom, onZoom = viewModel::setZoom,
+                fragment = state.fragment, onLink = viewModel::openLink,
                 fixedLayout = when (state.layoutMode) {
                     de.folio.reader.domain.model.BookLayoutMode.ORIGINAL -> true
                     de.folio.reader.domain.model.BookLayoutMode.REFLOWABLE -> false
@@ -220,6 +256,7 @@ fun ReaderScreen(
                 onBack = onBack,
                 onToggleFavorite = viewModel::toggleFavorite,
                 onTypography = { typographyVisible = true },
+                onNavigation = { viewModel.refreshNavigation(); navigationVisible = true },
             )
         }
 
@@ -248,6 +285,7 @@ private fun TopOverlay(
     onBack: () -> Unit,
     onToggleFavorite: () -> Unit,
     onTypography: () -> Unit,
+    onNavigation: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -264,6 +302,7 @@ private fun TopOverlay(
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Zurück")
             }
             androidx.compose.material3.TextButton(onClick = onTypography) { Text("Aa") }
+            androidx.compose.material3.TextButton(onClick = onNavigation) { Text("Inhalt") }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
@@ -347,6 +386,7 @@ private fun BottomOverlay(
 @Composable
 private fun EpubWebView(
     filePath: String,
+    bookRoot: File?, initialZoom: Float, onZoom: (Float) -> Unit, fragment: String, onLink: (String, String) -> Unit,
     fixedLayout: Boolean?,
     restoreFraction: Float,
     restoreCharOffset: Int,
@@ -363,7 +403,8 @@ private fun EpubWebView(
     onNextChapter: () -> Unit,
     onPrevChapter: () -> Unit,
 ) {
-    val bridge = remember { ReaderBridge(Handler(Looper.getMainLooper())) }
+    val bridge = remember { ReaderBridge(Handler(Looper.getMainLooper())).apply { zoomValue = initialZoom } }
+    bridge.zoomListener = onZoom
     bridge.positionListener = onPosition
     bridge.documentUrl = Uri.fromFile(File(filePath)).toString()
     bridge.toggleMenuListener = onToggleMenu
@@ -412,17 +453,27 @@ private fun EpubWebView(
                 setBackgroundColor(android.graphics.Color.parseColor(backgroundHex))
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
-                        return request.url.buildUpon().fragment(null).build().toString() != Uri.fromFile(File(lastLoaded[0] ?: filePath)).toString()
+                        val uri = request.url
+                        val root = bookRoot ?: return true
+                        if (uri.scheme == "file") runCatching {
+                            val target = File(uri.path.orEmpty()).canonicalFile
+                            if (target.path.startsWith(root.canonicalPath + File.separator)) onLink(target.path, uri.fragment.orEmpty())
+                        }
+                        return true
                     }
                     override fun shouldInterceptRequest(view: WebView, request: android.webkit.WebResourceRequest): android.webkit.WebResourceResponse? {
-                        val root = File(ctx.filesDir, "books").canonicalPath + File.separator
-                        val allowed = request.url.scheme == "file" && runCatching {
-                            File(request.url.path.orEmpty()).canonicalPath.startsWith(root)
-                        }.getOrDefault(false)
-                        return if (allowed) null else android.webkit.WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                        val root = bookRoot?.canonicalPath?.plus(File.separator)
+                        val file = if (request.url.scheme == "file") runCatching { File(request.url.path.orEmpty()).canonicalFile }.getOrNull() else null
+                        if (root == null || file == null || !file.path.startsWith(root)) return android.webkit.WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                        if (file.extension.lowercase() in setOf("html", "xhtml", "htm")) {
+                            return try { android.webkit.WebResourceResponse("text/html", "UTF-8", de.folio.reader.data.epub.EpubSafety.sanitize(file.readText()).byteInputStream()) }
+                            catch (_: Exception) { android.webkit.WebResourceResponse("text/plain", "UTF-8", "Kapitel konnte nicht geladen werden.".byteInputStream()) }
+                        }
+                        return null
                     }
                     override fun onPageFinished(view: WebView, url: String?) {
                         view.evaluateJavascript(injection[0], null)
+                        if (fragment.isNotBlank()) view.evaluateJavascript("(function(){var F=window.__folio,t=document.getElementById(" + jsString(fragment) + ");if(F&&t&&!F.fixed){var r=document.createRange();r.selectNodeContents(t);F.setScreen(F.pageOfRange(r),false,true);}})();", null)
                     }
                 }
                 webViewRef[0] = this
@@ -461,19 +512,21 @@ private class ReaderBridge(private val handler: Handler) {
     private fun isCurrentDocument(sourceUrl: String) =
         Uri.parse(sourceUrl).buildUpon().fragment(null).build().toString() == documentUrl
     var positionListener: (Float, Int, Boolean) -> Unit = { _, _, _ -> }
-    @Volatile private var zoom = 1f
+    @Volatile var zoomValue = 1f
+    var zoomListener: (Float) -> Unit = {}
 
     @JavascriptInterface
-    fun getZoom(): Float = zoom
+    fun getZoom(): Float = zoomValue
 
     @JavascriptInterface
-    fun setZoom(value: Float) { if (value.isFinite()) zoom = value.coerceIn(1f, 3f) }
+    fun setZoom(value: Float) { if (value.isFinite()) { zoomValue = value.coerceIn(1f, 3f); handler.post { zoomListener(zoomValue) } } }
     var toggleMenuListener: () -> Unit = {}
     var nextChapterListener: () -> Unit = {}
     var prevChapterListener: () -> Unit = {}
 
     @JavascriptInterface
     fun onPosition(fraction: Float, charOffset: Int, fromUser: Boolean, sourceUrl: String) {
+        if (!fraction.isFinite()) return
         val f = fraction.coerceIn(0f, 1f)
         handler.post { if (isCurrentDocument(sourceUrl)) positionListener(f, charOffset, fromUser) }
     }
@@ -684,8 +737,10 @@ internal fun buildInjection(
         F.changeZoom = function(delta) {
             var levels = [1, 1.5, 2, 3];
             var index = levels.indexOf(F.zoom);
+            var oldZoom = F.zoom;
             F.zoom = levels[Math.max(0, Math.min(levels.length - 1, index + delta))];
-            F.panX = 0; F.panY = 0;
+            F.panX = (F.panX + window.innerWidth / 2) * F.zoom / oldZoom - window.innerWidth / 2;
+            F.panY = (F.panY + window.innerHeight / 2) * F.zoom / oldZoom - window.innerHeight / 2;
             if (window.AndroidReader && AndroidReader.setZoom) AndroidReader.setZoom(F.zoom);
             F.layout();
         };
@@ -696,10 +751,12 @@ internal fun buildInjection(
         };
         F.zoomControls = function() {
             var controls = document.getElementById('folio-zoom');
+            var focused = controls && controls.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
             if (controls) controls.remove();
             controls = document.createElement('div');
             controls.id = 'folio-zoom';
             controls.style.cssText = 'position:fixed;bottom:8px;left:8px;z-index:2147483647;display:flex;flex-wrap:wrap;max-width:240px;gap:4px;background:white;color:black;padding:4px;border:1px solid black;';
+            if (F.zoomRight) { controls.style.left = 'auto'; controls.style.right = '8px'; }
             function button(text, label, action, disabled) {
                 var b = document.createElement('button');
                 b.textContent = text; b.setAttribute('aria-label', label); b.disabled = !!disabled;
@@ -710,7 +767,8 @@ internal fun buildInjection(
             button(F.zoomOpen ? '×' : 'Zoom', F.zoomOpen ? 'Zoomregler schließen' : 'Zoomregler öffnen', function() { F.zoomOpen = !F.zoomOpen; F.zoomControls(); });
             if (F.zoomOpen) {
                 button('−', 'Verkleinern', function() { F.changeZoom(-1); }, F.zoom === 1);
-                button(Math.round(F.zoom * 100) + '%', 'Ganze Seite anzeigen', function() { F.zoom = 1; F.changeZoom(0); });
+                button(Math.round(F.zoom * 100) + '%', 'Ganze Seite anzeigen', function() { F.zoom = 1; F.panX = 0; F.panY = 0; F.changeZoom(0); });
+                button('⇄', 'Zoomregler versetzen', function() { F.zoomRight = !F.zoomRight; F.zoomControls(); });
                 button('+', 'Vergrößern', function() { F.changeZoom(1); }, F.zoom === 3);
                 if (F.zoom > 1) {
                     button('←', 'Ausschnitt nach links', function() { F.pan(-1, 0); });
@@ -721,6 +779,7 @@ internal fun buildInjection(
             }
             // Sibling of body: never part of the publisher's transformed canvas or text index.
             document.documentElement.appendChild(controls);
+            if (focused) Array.from(controls.querySelectorAll('button')).find(function(b) { return b.getAttribute('aria-label') === focused; })?.focus({preventScroll:true});
         };
 
         // A fixed page is one canvas: preserve publisher CSS and scale every layer together.
@@ -846,6 +905,8 @@ internal fun buildInjection(
             document.addEventListener('click', function(e) {
                 var t = e.target;
                 if (t && t.closest && t.closest('#folio-zoom')) return;
+                if (window.getSelection && !window.getSelection().isCollapsed) { F.selectionAt = Date.now(); return; }
+                if (Date.now() - (F.selectionAt || 0) < 400) return;
                 if (t && t.closest && t.closest('a')) return; // Links normal folgen
                 var x = e.clientX / window.innerWidth;
                 if (Date.now() - (F.lastSwipe || 0) < 400) return;

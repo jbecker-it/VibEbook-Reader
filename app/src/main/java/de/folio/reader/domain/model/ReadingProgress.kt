@@ -35,6 +35,13 @@ data class ReadingProgress(
     val favoriteUpdatedAt: Long = 0L,
     /** Eigener Zeitstempel für explizites Gelesen/Ungelesen; 0 = automatische Erkennung. */
     val finishedUpdatedAt: Long = 0L,
+    val positionRevision: Long = 0L,
+    val favoriteRevision: Long = 0L,
+    val finishedRevision: Long = 0L,
+    val favoriteDeviceId: String = "",
+    val finishedDeviceId: String = "",
+    val contentRevision: String = "",
+    val chapterPath: String = "",
 ) {
     fun toJson(): String = JSONObject().apply {
         put("bookId", bookId)
@@ -47,18 +54,28 @@ data class ReadingProgress(
         put("favorite", favorite)
         put("favoriteUpdatedAt", favoriteUpdatedAt)
         put("finishedUpdatedAt", finishedUpdatedAt)
+        put("positionRevision", positionRevision)
+        put("favoriteRevision", favoriteRevision)
+        put("finishedRevision", finishedRevision)
+        put("favoriteDeviceId", favoriteDeviceId)
+        put("finishedDeviceId", finishedDeviceId)
+        put("contentRevision", contentRevision)
+        put("chapterPath", chapterPath)
         put("schema", SCHEMA_VERSION)
     }.toString()
 
     companion object {
-        const val SCHEMA_VERSION = 4
+        const val SCHEMA_VERSION = 5
 
         fun fromJson(raw: String): ReadingProgress {
             val o = JSONObject(raw)
+            require(o.optInt("schema", 1) in 1..SCHEMA_VERSION) { "Fortschrittsformat ist neuer als diese App. Bitte aktualisieren." }
+            val fraction = o.optDouble("scrollFraction", 0.0).toFloat()
+            require(fraction.isFinite() && fraction in 0f..1f && o.optInt("spineIndex", 0) >= 0 && o.optInt("charOffset", -1) >= -1) { "Ungültige Leseposition." }
             return ReadingProgress(
                 bookId = o.getString("bookId"),
                 spineIndex = o.optInt("spineIndex", 0),
-                scrollFraction = o.optDouble("scrollFraction", 0.0).toFloat(),
+                scrollFraction = fraction,
                 charOffset = o.optInt("charOffset", -1),
                 updatedAt = o.optLong("updatedAt", 0L),
                 deviceId = o.optString("deviceId", "unknown"),
@@ -66,6 +83,13 @@ data class ReadingProgress(
                 favorite = o.optBoolean("favorite", false),
                 favoriteUpdatedAt = o.optLong("favoriteUpdatedAt", 0L),
                 finishedUpdatedAt = o.optLong("finishedUpdatedAt", 0L),
+                positionRevision = o.optLong("positionRevision", 0L),
+                favoriteRevision = o.optLong("favoriteRevision", 0L),
+                finishedRevision = o.optLong("finishedRevision", 0L),
+                favoriteDeviceId = o.optString("favoriteDeviceId", ""),
+                finishedDeviceId = o.optString("finishedDeviceId", ""),
+                contentRevision = o.optString("contentRevision", ""),
+                chapterPath = o.optString("chapterPath", ""),
             )
         }
 
@@ -78,15 +102,20 @@ data class ReadingProgress(
         fun merge(a: ReadingProgress?, b: ReadingProgress?): ReadingProgress? {
             if (a == null) return b
             if (b == null) return a
-            val readingBase = if (a.updatedAt >= b.updatedAt) a else b
-            val favoriteBase = if (a.favoriteUpdatedAt >= b.favoriteUpdatedAt) a else b
+            require(a.bookId == b.bookId) { "Lesestände gehören zu verschiedenen Büchern." }
+            val readingBase = maxOf(a, b, compareBy<ReadingProgress>({ it.updatedAt }, { it.positionRevision }, { it.deviceId }, { it.spineIndex }, { it.scrollFraction }, { it.charOffset }, { it.contentRevision }, { it.chapterPath }))
+            val favoriteBase = maxOf(a, b, compareBy<ReadingProgress>({ it.favoriteUpdatedAt }, { it.favoriteRevision }, { it.favoriteDeviceId }, { it.favorite }))
             val finishedBase = if (a.finishedUpdatedAt == 0L && b.finishedUpdatedAt == 0L) readingBase
-                else if (a.finishedUpdatedAt >= b.finishedUpdatedAt) a else b
+                else maxOf(a, b, compareBy<ReadingProgress>({ it.finishedUpdatedAt }, { it.finishedRevision }, { it.finishedDeviceId }, { it.finished }))
             return readingBase.copy(
                 finished = finishedBase.finished,
                 finishedUpdatedAt = finishedBase.finishedUpdatedAt,
                 favorite = favoriteBase.favorite,
                 favoriteUpdatedAt = favoriteBase.favoriteUpdatedAt,
+                favoriteRevision = favoriteBase.favoriteRevision,
+                favoriteDeviceId = favoriteBase.favoriteDeviceId,
+                finishedRevision = finishedBase.finishedRevision,
+                finishedDeviceId = finishedBase.finishedDeviceId,
             )
         }
     }

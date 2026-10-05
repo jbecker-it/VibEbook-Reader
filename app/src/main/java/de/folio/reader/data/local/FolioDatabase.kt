@@ -5,11 +5,22 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [BookEntity::class], version = 3, exportSchema = false)
+@Database(entities = [BookEntity::class], version = 4, exportSchema = true)
 abstract class FolioDatabase : RoomDatabase() {
     abstract fun bookDao(): BookDao
 
     companion object {
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf(
+                    "remoteId TEXT NOT NULL DEFAULT ''", "aliasesJson TEXT NOT NULL DEFAULT '[]'",
+                    "listedEtag TEXT NOT NULL DEFAULT ''", "contentRevision TEXT NOT NULL DEFAULT ''",
+                    "tocJson TEXT NOT NULL DEFAULT '[]'", "localOnly INTEGER NOT NULL DEFAULT 0",
+                    "keepOffline INTEGER NOT NULL DEFAULT 1", "lastOpenedAt INTEGER NOT NULL DEFAULT 0",
+                    "addedAt INTEGER NOT NULL DEFAULT 0", "downloadError TEXT NOT NULL DEFAULT ''",
+                ).forEach { db.execSQL("ALTER TABLE books ADD COLUMN $it") }
+            }
+        }
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE books ADD COLUMN remoteEtag TEXT NOT NULL DEFAULT ''")
