@@ -458,6 +458,8 @@ private fun WebView.installReaderBridge(bridge: ReaderBridge) {
 /** Brücke vom WebView-JavaScript nach Kotlin (JS-Thread → Main-Thread). */
 private class ReaderBridge(private val handler: Handler) {
     var documentUrl: String? = null
+    private fun isCurrentDocument(sourceUrl: String) =
+        Uri.parse(sourceUrl).buildUpon().fragment(null).build().toString() == documentUrl
     var positionListener: (Float, Int, Boolean) -> Unit = { _, _, _ -> }
     @Volatile private var zoom = 1f
 
@@ -473,7 +475,7 @@ private class ReaderBridge(private val handler: Handler) {
     @JavascriptInterface
     fun onPosition(fraction: Float, charOffset: Int, fromUser: Boolean, sourceUrl: String) {
         val f = fraction.coerceIn(0f, 1f)
-        handler.post { if (sourceUrl == documentUrl) positionListener(f, charOffset, fromUser) }
+        handler.post { if (isCurrentDocument(sourceUrl)) positionListener(f, charOffset, fromUser) }
     }
 
     @JavascriptInterface
@@ -483,12 +485,12 @@ private class ReaderBridge(private val handler: Handler) {
 
     @JavascriptInterface
     fun onNextChapter(sourceUrl: String) {
-        handler.post { if (sourceUrl == documentUrl) nextChapterListener() }
+        handler.post { if (isCurrentDocument(sourceUrl)) nextChapterListener() }
     }
 
     @JavascriptInterface
     fun onPrevChapter(sourceUrl: String) {
-        handler.post { if (sourceUrl == documentUrl) prevChapterListener() }
+        handler.post { if (isCurrentDocument(sourceUrl)) prevChapterListener() }
     }
 }
 
