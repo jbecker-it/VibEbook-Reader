@@ -59,6 +59,23 @@ fun SettingsScreen(
     val connectionTest by viewModel.connectionTest.collectAsStateWithLifecycle()
     val reader by viewModel.readerPreferences.collectAsStateWithLifecycle()
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val autoDownload by viewModel.autoDownload.collectAsStateWithLifecycle()
+    val storageBudget by viewModel.storageBudget.collectAsStateWithLifecycle()
+    val storageUsed by viewModel.storageUsed.collectAsStateWithLifecycle()
+    val nativeFavorites by viewModel.nativeFavorites.collectAsStateWithLifecycle()
+    val update by viewModel.update.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
+    val loginResult by viewModel.loginResult.collectAsStateWithLifecycle()
+    val loginUrl by viewModel.loginUrl.collectAsStateWithLifecycle()
+    val loginPending by viewModel.loginPending.collectAsStateWithLifecycle()
+    val folders by viewModel.folders.collectAsStateWithLifecycle()
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")) { uri -> uri?.let { viewModel.exportProgress(context, it) } }
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.importProgress(context, it) } }
+    LaunchedEffect(loginUrl) { loginUrl?.let { url ->
+        runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+        viewModel.consumedLoginUrl()
+    } }
     androidx.activity.compose.BackHandler { onClose() }
 
     var serverUrl by remember { mutableStateOf("") }
@@ -67,12 +84,17 @@ fun SettingsScreen(
     var rootPath by remember { mutableStateOf("") }
     var progressDir by remember { mutableStateOf(".folio-progress") }
     var seeded by remember { mutableStateOf(false) }
+    var davUser by remember { mutableStateOf("") }
+    var picker by remember { mutableStateOf(false) }
+    var pickerPath by remember { mutableStateOf("") }
+    LaunchedEffect(serverUrl, user, password, rootPath, progressDir) { viewModel.resetConnectionTest() }
+    LaunchedEffect(loginResult) { loginResult?.let { serverUrl = it.serverUrl; user = it.username; password = it.password; davUser = it.davUser } }
 
     LaunchedEffect(saved) {
         if (!seeded && saved != NextcloudSettings()) {
             serverUrl = saved.serverUrl; user = saved.username
             password = saved.password; rootPath = saved.rootPath
-            progressDir = saved.progressDir
+            progressDir = saved.progressDir; davUser = saved.davUser
             seeded = true
         }
     }
@@ -80,9 +102,19 @@ fun SettingsScreen(
     fun current() = NextcloudSettings(
         serverUrl = serverUrl.trim(), username = user.trim(),
         password = password, rootPath = rootPath.trim('/'),
-        progressDir = progressDir.trim().ifBlank { ".folio-progress" },
+        progressDir = progressDir.trim().ifBlank { ".folio-progress" }, davUser = davUser,
     )
 
+    if (picker) {
+        androidx.compose.material3.AlertDialog(onDismissRequest = { picker = false }, title = { Text("Bücherordner wählen") },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("/" + pickerPath)
+                if (pickerPath.isNotEmpty()) androidx.compose.material3.TextButton(onClick = { pickerPath = pickerPath.substringBeforeLast('/', ""); viewModel.browseFolders(current(), pickerPath) }) { Text("Eine Ebene höher") }
+                folders.forEach { folder -> androidx.compose.material3.TextButton(onClick = { pickerPath = folder; viewModel.browseFolders(current(), folder) }) { Text(folder.substringAfterLast('/')) } }
+                message?.let { Text(it) }
+            } }, confirmButton = { androidx.compose.material3.TextButton(onClick = { rootPath = pickerPath; picker = false }) { Text("Diesen Ordner verwenden") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { picker = false }) { Text("Abbrechen") } })
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -102,6 +134,9 @@ fun SettingsScreen(
                 .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            SectionTitle("Folio ${de.folio.reader.BuildConfig.VERSION_NAME}")
+            OutlinedButton(onClick = viewModel::checkUpdate) { Text("Auf Updates prüfen") }
+            update?.let { newer -> OutlinedButton(onClick = { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(newer.url))) }) { Text("Version 1.0.${newer.version} herunterladen") } }
             SectionTitle("Darstellung")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ThemeMode.entries.forEach { mode ->
@@ -156,19 +191,24 @@ fun SettingsScreen(
             )
 
             SectionTitle("Nextcloud-Verbindung")
+            message?.let { Text(it) }
+            if (loginPending) {
+                Text("Anmeldung im Browser bestätigen …")
+                OutlinedButton(onClick = viewModel::cancelLogin) { Text("Anmeldung abbrechen") }
+            } else OutlinedButton(onClick = { viewModel.startLogin(serverUrl) }, enabled = serverUrl.startsWith("https://")) { Text("Mit Nextcloud im Browser anmelden") }
             Text("In Nextcloud unter Persönliche Einstellungen → Sicherheit ein App-Passwort erstellen. Ordner sind relativ zu deinen Nextcloud-Dateien.")
             OutlinedTextField(
-                value = serverUrl, onValueChange = { serverUrl = it },
+                value = serverUrl, onValueChange = { serverUrl = it; viewModel.resetConnectionTest() },
                 label = { Text("Serveradresse (https://cloud.example.com)") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
-                value = user, onValueChange = { user = it },
+                value = user, onValueChange = { user = it; viewModel.resetConnectionTest() },
                 label = { Text("Benutzername") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
-                value = password, onValueChange = { password = it },
+                value = password, onValueChange = { password = it; viewModel.resetConnectionTest() },
                 label = { Text("App-Passwort") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -176,17 +216,18 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
-                value = rootPath, onValueChange = { rootPath = it },
+                value = rootPath, onValueChange = { rootPath = it; viewModel.resetConnectionTest() },
                 label = { Text("Unterordner mit Büchern (optional)") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
-                value = progressDir, onValueChange = { progressDir = it },
+                value = progressDir, onValueChange = { progressDir = it; viewModel.resetConnectionTest() },
                 label = { Text("Ordner für Lesefortschritt") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
 
-            ConnectionStatus(connectionTest)
+            OutlinedButton(onClick = { pickerPath = rootPath; viewModel.browseFolders(current(), pickerPath); picker = true }, enabled = current().isConfigured) { Text("Bücherordner auswählen") }
+            ConnectionStatus(connectionTest, eInkMode)
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(
@@ -201,6 +242,16 @@ fun SettingsScreen(
                 ) { Text("Speichern") }
             }
 
+            SectionTitle("Offline-Speicher")
+            Text("${storageUsed / (1024 * 1024)} MB lokal · Limit $storageBudget MB")
+            PreferenceSwitch("Neue Bücher automatisch herunterladen", autoDownload, viewModel::setAutoDownload)
+            Text("Bei deaktiviertem Schalter lädt ein Tipp auf das Buch nur diesen Titel und öffnet ihn danach.")
+            PreferenceStepper("Speicherlimit", { viewModel.setStorageBudget(storageBudget - 512) }, { viewModel.setStorageBudget(storageBudget + 512) })
+            PreferenceSwitch("Favoriten auch in Nextcloud markieren", nativeFavorites, viewModel::setNativeFavorites)
+            Text("Aktiviert: Folio schreibt seine Favoritenmarkierung zusätzlich in Nextcloud Files. Folio-Lesestände bleiben die gemeinsame Quelle für deine Geräte.")
+            SectionTitle("Lesestände sichern")
+            OutlinedButton(onClick = { exportLauncher.launch("folio-lesestaende.json") }) { Text("Sicherung exportieren") }
+            OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/plain")) }) { Text("Sicherung importieren und zusammenführen") }
             SectionTitle("Synchronisierung")
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -222,11 +273,11 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun ConnectionStatus(state: ConnectionTest) {
+private fun ConnectionStatus(state: ConnectionTest, eInk: Boolean) {
     when (state) {
         ConnectionTest.Idle -> Unit
         ConnectionTest.Testing -> Row(verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.padding(end = 8.dp))
+            if (eInk) Text("…", Modifier.padding(end = 8.dp)) else CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.padding(end = 8.dp))
             Text("Teste Verbindung …")
         }
         ConnectionTest.Success -> Row(verticalAlignment = Alignment.CenterVertically) {

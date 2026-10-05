@@ -50,6 +50,7 @@ class SyncManager @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val workManager get() = WorkManager.getInstance(context)
+    private val scheduleLock = kotlinx.coroutines.sync.Mutex()
     private val backgroundError = MutableStateFlow<String?>(null)
 
     private val network = callbackFlow {
@@ -100,6 +101,7 @@ class SyncManager @Inject constructor(
         .combine(workManager.getWorkInfosForUniqueWorkFlow(WORK_PERIODIC)) { oneTime, periodic ->
             oneTime + periodic.filter { it.state == WorkInfo.State.RUNNING }
         }
+        .combine(workManager.getWorkInfosForUniqueWorkFlow(WORK_PROGRESS)) { library, progress -> library + progress }
         .combine(network.combine(settingsRepo.wifiOnly) { state, unmetered -> state to unmetered }) { infos, (network, unmetered) ->
             val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
             when {
@@ -107,7 +109,7 @@ class SyncManager @Inject constructor(
                     val fraction = running.progress.getFloat(SyncWorker.KEY_FRACTION, -1f)
                     SyncStatus(
                         running = true,
-                        message = running.progress.getString(SyncWorker.KEY_MESSAGE),
+                        message = running.progress.getString(SyncWorker.KEY_MESSAGE) ?: "Lesestände abgleichen …",
                         fraction = fraction.takeIf { it in 0f..1f },
                     )
                 }
@@ -123,7 +125,7 @@ class SyncManager @Inject constructor(
                 status.copy(message = listOfNotNull(status.message?.takeUnless { it == failure }, failure).joinToString("\n"))
             } else status
         }.combine(progressRepo.pendingCount) { status, count ->
-            if (!status.running && status.message == null) status.copy(message = if (count > 0) "Lokal gespeichert · $count Änderungen ausstehend" else "Lesestände synchronisiert") else status
+            if (!status.running && status.message == null) status.copy(message = if (count > 0) "Lokal gespeichert · $count Änderungen ausstehend" else "Lokal gespeichert") else status
         }.combine(progressRepo.error) { status, error ->
             if (error != null && !status.running) status.copy(message = error) else status
         }.combine(backgroundError) { status, error ->
@@ -139,6 +141,8 @@ class SyncManager @Inject constructor(
     }
 
     private suspend fun scheduleProgress(all: Boolean) {
+        scheduleLock.lock()
+        try {
         val request = OneTimeWorkRequestBuilder<ProgressSyncWorker>()
             .setInputData(workDataOf("all" to all))
             .setConstraints(constraints(settingsRepo.wifiOnly.first()))
@@ -149,6 +153,7 @@ class SyncManager @Inject constructor(
             if (infos.none { it.state == WorkInfo.State.ENQUEUED })
                 workManager.enqueueUniqueWork(WORK_PROGRESS, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
         }
+        } finally { scheduleLock.unlock() }
     }
 
     /** Sofortige, einmalige Synchronisierung. */

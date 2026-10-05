@@ -12,7 +12,7 @@ import tempfile
 spec = importlib.util.spec_from_file_location('sign_apk', 'scripts/sign-apk.py')
 signing = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(signing)
-apk = Path('app/build/outputs/apk/debug/app-debug.apk')
+apk = Path('app/build/outputs/apk/release/app-release-unsigned.apk')
 
 with tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as directory:
     root = Path(directory)

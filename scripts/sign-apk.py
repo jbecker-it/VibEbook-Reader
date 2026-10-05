@@ -59,6 +59,7 @@ def sign(apk, output, expected_file):
             raise RuntimeError(f"Final APK signing certificate verification failed (public fingerprints: {fingerprints})")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(signed.read_bytes())
+        output.with_suffix('.sha256').write_text(hashlib.sha256(output.read_bytes()).hexdigest() + '  ' + output.name + '\n')
         output.with_suffix('.signing.txt').write_text(
             f"Certificate SHA-256: {expected}\nAPK SHA-256: {hashlib.sha256(output.read_bytes()).hexdigest()}\n"
             f"Version code: {os.environ.get('FOLIO_VERSION_CODE', 'local')}\n"

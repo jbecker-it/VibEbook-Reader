@@ -12,6 +12,8 @@ import okio.buffer
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Credentials
+import okhttp3.FormBody
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -46,13 +48,17 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
 
     private suspend fun execute(settings: NextcloudSettings, path: String, method: String,
         body: String? = null, headers: Map<String, String> = emptyMap()): Response {
-        val job = coroutineContext[Job]
         val request = Request.Builder().url(settings.davUrl(path))
             .header("Authorization", Credentials.basic(settings.username.trim(), settings.password, Charsets.UTF_8))
             .method(method, body?.toRequestBody((if (method in listOf("PROPFIND", "PROPPATCH")) "application/xml; charset=utf-8" else "application/json; charset=utf-8").toMediaType()))
         headers.forEach { (key, value) -> request.header(key, value) }
+        return executeRequest(request.build())
+    }
+
+    private suspend fun executeRequest(request: Request): Response {
+        val job = coroutineContext[Job]
         return suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request.build())
+            val call = client.newCall(request)
             @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
             val cancellation = job?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause -> if (cause != null) call.cancel() }
             continuation.invokeOnCancellation { call.cancel() }
@@ -73,6 +79,50 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
                     continuation.resume(managed) { managed.close() }
                 }
             })
+        }
+    }
+
+    class LoginSession(val server: HttpUrl, val loginUrl: HttpUrl, val endpoint: HttpUrl, val token: String) {
+        override fun toString() = "LoginSession(redacted)"
+    }
+    internal fun sameServer(base: HttpUrl, value: String): HttpUrl = value.toHttpUrl().also {
+        require(it.isHttps && it.host == base.host && it.port == base.port && it.username.isEmpty() && it.password.isEmpty()) { "Nextcloud-Anmeldung verweist auf einen anderen Server." }
+    }
+    suspend fun startLogin(serverAddress: String): LoginSession = withContext(Dispatchers.IO) {
+        val base = serverAddress.trim().trimEnd('/').toHttpUrl()
+        require(base.isHttps && base.username.isEmpty() && base.password.isEmpty() && base.query == null && base.fragment == null) { "Eine HTTPS-Serveradresse ohne Zugangsdaten eingeben." }
+        val request = Request.Builder().url(base.newBuilder().addPathSegments("index.php/login/v2").build())
+            .header("User-Agent", "Folio Reader Android").post(FormBody.Builder().build()).build()
+        executeRequest(request).use { r ->
+            if (r.code != 200) throw DavException(r.code, "Nextcloud-Anmeldung starten")
+            val json = JSONObject(r.body?.byteStream()?.use { readLimited(it, 65536) } ?: throw IOException("Leere Anmeldung."))
+            val poll = json.getJSONObject("poll")
+            LoginSession(base, sameServer(base, json.getString("login")), sameServer(base, poll.getString("endpoint")), poll.getString("token"))
+        }
+    }
+    suspend fun pollLogin(session: LoginSession): NextcloudSettings? = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(session.endpoint).header("User-Agent", "Folio Reader Android")
+            .post(FormBody.Builder().add("token", session.token).build()).build()
+        executeRequest(request).use { r ->
+            if (r.code == 404) return@withContext null
+            if (r.code != 200) throw DavException(r.code, "Nextcloud-Anmeldung bestätigen")
+            val json = JSONObject(r.body?.byteStream()?.use { readLimited(it, 65536) } ?: throw IOException("Leere Anmeldung."))
+            val server = sameServer(session.server, json.getString("server"))
+            val settings = NextcloudSettings(server.toString().trimEnd('/'), json.getString("loginName"), json.getString("appPassword"))
+            settings.validate()
+            resolveAccount(settings)
+        }
+    }
+    suspend fun resolveAccount(settings: NextcloudSettings): NextcloudSettings = withContext(Dispatchers.IO) {
+        settings.validate()
+        val url = settings.serverUrl.trimEnd('/').toHttpUrl().newBuilder().addPathSegments("ocs/v2.php/cloud/user").addQueryParameter("format", "json").build()
+        val request = Request.Builder().url(url).header("OCS-APIRequest", "true")
+            .header("Authorization", Credentials.basic(settings.username.trim(), settings.password, Charsets.UTF_8)).build()
+        executeRequest(request).use { r ->
+            if (r.code != 200) throw DavException(r.code, "Nextcloud-Benutzer prüfen")
+            val json = JSONObject(r.body?.byteStream()?.use { readLimited(it, 65536) } ?: throw IOException("Leere Benutzerantwort.")).getJSONObject("ocs")
+            require(json.getJSONObject("meta").optInt("statuscode") in listOf(100, 200)) { "Nextcloud-Benutzer konnte nicht geprüft werden." }
+            settings.copy(davUser = json.getJSONObject("data").getString("id")).also { it.validate() }
         }
     }
 

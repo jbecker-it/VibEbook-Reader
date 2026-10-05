@@ -11,11 +11,12 @@ import javax.inject.Singleton
 @Singleton
 class SyncFailureStore @Inject constructor(@ApplicationContext context: Context) {
     private val prefs = context.getSharedPreferences("sync_failure", Context.MODE_PRIVATE)
-    private val current = MutableStateFlow(prefs.getString("message", null))
+    private val current = MutableStateFlow(combined())
     val message = current.asStateFlow()
 
-    @Synchronized fun set(message: String?) {
-        prefs.edit().putString("message", message).apply()
-        current.value = message
+    private fun combined() = listOfNotNull(prefs.getString("message", null), prefs.getString("progress", null)).distinct().joinToString("\n").takeIf { it.isNotBlank() }
+    @Synchronized fun set(message: String?, channel: String = "message") {
+        prefs.edit().putString(channel, message).apply()
+        current.value = combined()
     }
 }

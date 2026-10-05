@@ -12,8 +12,8 @@ object EpubSafety {
         return file
     }
     /** Keep publisher layout; remove book-owned executable content. App pagination is injected separately. */
-    fun sanitize(html: String): String {
-        val doc = Jsoup.parse(html)
+    fun sanitize(html: String, svg: Boolean = false): String {
+        val doc = if (svg) Jsoup.parse(html, "", org.jsoup.parser.Parser.xmlParser()) else Jsoup.parse(html)
         doc.outputSettings().prettyPrint(false)
         doc.select("script,iframe,object,embed,base,meta[http-equiv=refresh]").remove()
         doc.allElements.forEach { element ->
@@ -24,7 +24,7 @@ object EpubSafety {
             }
         }
         doc.select("meta[http-equiv=Content-Security-Policy]").remove()
-        doc.head().prependElement("meta").attr("http-equiv", "Content-Security-Policy")
+        if (!svg) doc.head().prependElement("meta").attr("http-equiv", "Content-Security-Policy")
             .attr("content", "default-src 'none'; img-src 'self' file: data:; style-src 'self' file: 'unsafe-inline'; font-src 'self' file: data:; script-src 'none'; frame-src 'none'; connect-src 'none'")
         return doc.outerHtml()
     }

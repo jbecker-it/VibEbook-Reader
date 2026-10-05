@@ -465,8 +465,8 @@ private fun EpubWebView(
                         val root = bookRoot?.canonicalPath?.plus(File.separator)
                         val file = if (request.url.scheme == "file") runCatching { File(request.url.path.orEmpty()).canonicalFile }.getOrNull() else null
                         if (root == null || file == null || !file.path.startsWith(root)) return android.webkit.WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
-                        if (file.extension.lowercase() in setOf("html", "xhtml", "htm")) {
-                            return try { android.webkit.WebResourceResponse("text/html", "UTF-8", de.folio.reader.data.epub.EpubSafety.sanitize(file.readText()).byteInputStream()) }
+                        if (request.isForMainFrame || file.extension.lowercase() in setOf("html", "xhtml", "htm", "svg")) {
+                            return try { android.webkit.WebResourceResponse(if (file.extension.equals("svg", true) && !request.isForMainFrame) "image/svg+xml" else "text/html", "UTF-8", de.folio.reader.data.epub.EpubSafety.sanitize(file.readText(), file.extension.equals("svg", true)).byteInputStream()) }
                             catch (_: Exception) { android.webkit.WebResourceResponse("text/plain", "UTF-8", "Kapitel konnte nicht geladen werden.".byteInputStream()) }
                         }
                         return null

@@ -9,6 +9,7 @@ data class NextcloudSettings(
     val password: String = "",
     val rootPath: String = "",
     val progressDir: String = ".folio-progress",
+    val davUser: String = "",
 ) {
     val isConfigured: Boolean get() = runCatching { validate() }.isSuccess
 
@@ -19,6 +20,7 @@ data class NextcloudSettings(
             "Serveradresse ohne Zugangsdaten, Abfrage oder Fragment eingeben."
         }
         require(username.isNotBlank() && ':' !in username && '/' !in username) { "Nextcloud-Benutzernamen eingeben." }
+        require(davUser.isEmpty() || (davUser.isNotBlank() && '/' !in davUser && '\\' !in davUser && !davUser.any(Char::isISOControl))) { "Ungültige Nextcloud-Benutzer-ID." }
         require(password.isNotBlank()) { "Ein Nextcloud-App-Passwort ist erforderlich." }
         segments(rootPath)
         require(segments(progressDir).isNotEmpty()) { "Fortschrittsordner eingeben." }
@@ -27,7 +29,7 @@ data class NextcloudSettings(
     fun davUrl(path: String = ""): HttpUrl {
         validate()
         val base = serverUrl.trim().trimEnd('/').toHttpUrl().newBuilder()
-            .addPathSegments("remote.php/dav/files").addPathSegment(username.trim())
+            .addPathSegments("remote.php/dav/files").addPathSegment(davUser.ifBlank { username }.trim())
         segments(path).forEach { base.addPathSegment(it) }
         return base.build()
     }

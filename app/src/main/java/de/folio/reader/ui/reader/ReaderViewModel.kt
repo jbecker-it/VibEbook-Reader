@@ -55,7 +55,7 @@ class ReaderViewModel @Inject constructor(
                     val saved = current?.progress
                     val editionChanged = saved?.contentRevision?.isNotBlank() == true && current != null && saved.contentRevision != current.contentRevision
                     val root = current?.let { bookRepository.extractionRoot(it) }
-                    val indexByPath = if (saved?.chapterPath?.isNotBlank() == true && root != null) current.spine.indexOfFirst { java.io.File(it).relativeTo(root).invariantSeparatorsPath == saved.chapterPath } else -1
+                    val indexByPath = if (saved?.chapterPath?.isNotBlank() == true && root != null && current != null) current.spine.indexOfFirst { java.io.File(it).relativeTo(root).invariantSeparatorsPath == saved.chapterPath } else -1
                     _state.value = ReaderUiState(book = current, favorite = current?.favorite ?: false, loading = false,
                         spineIndex = (if (indexByPath >= 0) indexByPath else saved?.spineIndex ?: 0).coerceIn(0, (current?.spine?.lastIndex ?: 0).coerceAtLeast(0)),
                         restoreScrollFraction = saved?.scrollFraction ?: 0f, chapterFraction = saved?.scrollFraction ?: 0f,

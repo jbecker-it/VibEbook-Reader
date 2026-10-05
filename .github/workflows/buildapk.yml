@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     env:
       FOLIO_VERSION_CODE: ${{ github.run_number }}
     
@@ -39,7 +39,7 @@ jobs:
       run: chmod +x ./gradlew
     
     - name: Test, lint, and build APK
-      run: ./gradlew testDebugUnitTest lintDebug assembleDebug
+      run: ./gradlew testDebugUnitTest lintRelease assembleRelease
     
     - name: Test signing guards and repeatability
       run: python3 scripts/test-signing.py
@@ -48,7 +48,7 @@ jobs:
       if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
       env:
         FOLIO_SIGNING_BUNDLE: ${{ secrets.FOLIO_SIGNING_BUNDLE }}
-      run: python3 scripts/sign-apk.py --input app/build/outputs/apk/debug/app-debug.apk --output app/build/outputs/distribution/folio.apk
+      run: python3 scripts/sign-apk.py --input app/build/outputs/apk/release/app-release-unsigned.apk --output app/build/outputs/distribution/folio.apk
 
     - name: Upload consistently signed APK
       if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -59,11 +59,27 @@ jobs:
         if-no-files-found: error
         retention-days: 30
 
+    - name: Publish downloadable release APK
+      if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        RELEASE_TAG="folio-1.0.${FOLIO_VERSION_CODE}"
+        args=()
+        if [ "$EVENT_NAME" = "pull_request" ]; then args+=(--prerelease); fi
+        if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          gh release upload "$RELEASE_TAG" app/build/outputs/distribution/folio.apk app/build/outputs/distribution/folio.sha256 --clobber
+        else
+          gh release create "$RELEASE_TAG" app/build/outputs/distribution/folio.apk app/build/outputs/distribution/folio.sha256 --target "$SOURCE_SHA" --title "Folio 1.0.${FOLIO_VERSION_CODE}" --notes-file docs/RELEASE-NOTES.md "${args[@]}"
+        fi
+
     - name: Print lint errors
       if: failure()
       run: |
-        if [ -f app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt ]; then
-          cat app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+        if [ -f app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt ]; then
+          cat app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt
         fi
 
     - name: Upload test and lint reports
@@ -74,4 +90,5 @@ jobs:
         path: |
           app/build/reports/
           app/build/test-results/
+          app/schemas/
         retention-days: 14

@@ -10,8 +10,9 @@ import de.folio.reader.ui.settings.SettingsScreen
 
 /** Each reader entry owns its ViewModel; leaving it releases its book and observers. */
 @Composable
-fun FolioApp() {
+fun FolioApp(importedBookId: String? = null, onImportConsumed: () -> Unit = {}) {
     val nav = rememberNavController()
+    androidx.compose.runtime.LaunchedEffect(importedBookId) { importedBookId?.let { nav.navigate("reader/$it"); onImportConsumed() } }
     NavHost(navController = nav, startDestination = "library") {
         composable("library") { LibraryScreen(onBookSelected = { nav.navigate("reader/$it") }, onOpenSettings = { nav.navigate("settings") }) }
         composable("settings") { SettingsScreen(onClose = { nav.popBackStack() }) }

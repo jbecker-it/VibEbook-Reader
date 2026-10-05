@@ -72,6 +72,7 @@ data class ReadingProgress(
             require(o.optInt("schema", 1) in 1..SCHEMA_VERSION) { "Fortschrittsformat ist neuer als diese App. Bitte aktualisieren." }
             val fraction = o.optDouble("scrollFraction", 0.0).toFloat()
             require(fraction.isFinite() && fraction in 0f..1f && o.optInt("spineIndex", 0) >= 0 && o.optInt("charOffset", -1) >= -1) { "Ungültige Leseposition." }
+            require(listOf("updatedAt", "favoriteUpdatedAt", "finishedUpdatedAt", "positionRevision", "favoriteRevision", "finishedRevision").all { o.optLong(it, 0) >= 0 }) { "Ungültige Lesestand-Version." }
             return ReadingProgress(
                 bookId = o.getString("bookId"),
                 spineIndex = o.optInt("spineIndex", 0),

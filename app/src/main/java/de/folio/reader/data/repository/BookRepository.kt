@@ -82,8 +82,8 @@ class BookRepository @Inject constructor(
         remote.forEach { entry ->
             val rel = if (rootPrefix.isEmpty()) entry.relativePath else entry.relativePath.removePrefix("$rootPrefix/")
             val byRemote = if (entry.remoteId.isNotEmpty()) bookDao.getByRemoteId(entry.remoteId) else null
-            val id = byRemote?.id ?: registry[entry.remoteId] ?: BookId.fromPath(rel)
-            val existing = byRemote ?: bookDao.getById(id)
+            val id = registry[entry.remoteId] ?: byRemote?.id ?: BookId.fromPath(rel)
+            val existing = bookDao.getById(id) ?: byRemote
             keepIds += id
             val aliases = existing?.aliasesJson?.toStringList().orEmpty().toMutableSet()
             if (existing != null && existing.relativePath != rel) aliases += existing.relativePath
@@ -91,7 +91,9 @@ class BookRepository @Inject constructor(
                 keepOffline = autoDownload, addedAt = System.currentTimeMillis())).copy(
                 relativePath = rel, remoteId = entry.remoteId, aliasesJson = JSONArray(aliases.toList()).toString(), listedEtag = entry.etag, missingRemotely = false,
             )
-            bookDao.upsert(entity)
+            if (existing != null && existing.id != id) progressRepo.read(existing.id)?.let { progressRepo.write(it.copy(bookId = id)) }
+            bookDao.upsert(entity.copy(id = id))
+            if (existing != null && existing.id != id) bookDao.delete(existing.id)
             val changed = !entity.downloaded || (entry.etag.isNotBlank() && entity.remoteEtag != entry.etag) || entity.sizeBytes != entry.size
             if (entity.keepOffline && changed) downloadIds += id
         }
@@ -120,7 +122,8 @@ class BookRepository @Inject constructor(
         val entity = bookDao.getById(id) ?: throw IOException("Buch nicht gefunden.")
         require(!entity.localOnly) { "Lokale Datei erneut importieren." }
         bookDao.setKeepOffline(id, true)
-        downloadAndExtract(settings, id, entity.relativePath, entity.listedEtag, entity.sizeBytes)
+        val remote = nextcloudClient.list(settings, joinPath(settings.rootPath, entity.relativePath.substringBeforeLast('/', ""))).firstOrNull { it.relativePath == joinPath(settings.rootPath, entity.relativePath) } ?: throw IOException("Buch nicht mehr in Nextcloud vorhanden.")
+        downloadAndExtract(settings, id, entity.relativePath, remote.etag, remote.size)
     }
 
     suspend fun opened(id: String) { bookDao.opened(id, System.currentTimeMillis()) }
@@ -155,6 +158,39 @@ class BookRepository @Inject constructor(
     suspend fun history(id: String) = progressRepo.history(id)
     suspend fun exportProgress() = progressRepo.export()
     suspend fun importProgress(raw: String) = progressRepo.import(raw)
+
+    suspend fun importLocal(uri: android.net.Uri): String = libraryMutex.withLock { withContext(Dispatchers.IO) {
+        require(uri.scheme == "content") { "Datei über die Android-Dateiauswahl öffnen." }
+        val displayName = context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "Buch.epub"
+        require(displayName.endsWith(".epub", true) || displayName.endsWith(".cbz", true)) { "EPUB- oder CBZ-Datei auswählen." }
+        cleanupRevisions()
+        val budget = settingsRepo.storageBudgetMb.first() * 1024L * 1024L
+        val maxBytes = minOf(budget - storageBytes(), context.filesDir.usableSpace - 64L * 1024 * 1024).coerceAtLeast(0)
+        val tmp = File.createTempFile("import-", ".zip", context.cacheDir)
+        var bookDir: File? = null
+        try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            context.contentResolver.openInputStream(uri)?.use { input -> tmp.outputStream().use { out ->
+                val buffer = ByteArray(65536); var total = 0L
+                while (true) { kotlin.coroutines.coroutineContext.ensureActive(); val n = input.read(buffer); if (n < 0) break
+                    total += n; require(total <= maxBytes) { "Offline-Speicherlimit erreicht." }; digest.update(buffer, 0, n); out.write(buffer, 0, n)
+                }
+            } } ?: error("Datei konnte nicht gelesen werden.")
+            val revision = digest.digest().joinToString("") { "%02x".format(it) }
+            val id = BookId.fromPath("local:$revision")
+            val existing = bookDao.getById(id)
+            if (existing?.downloaded == true) return@withContext id
+            val directory = File(booksDir, "$id-${java.util.UUID.randomUUID()}"); bookDir = directory
+            val job = kotlin.coroutines.coroutineContext
+            epubParser.extract(tmp, directory, minOf(maxBytes, context.filesDir.usableSpace - 64L * 1024 * 1024)) { job.ensureActive() }
+            val parsed = epubParser.parse(directory)
+            require(parsed.spine.isNotEmpty()) { "Datei enthält keine lesbaren Seiten." }
+            bookDao.upsert(BookEntity(id, "Lokale Importe/$displayName", if (displayName.endsWith(".cbz", true)) displayName.substringBeforeLast('.') else parsed.title,
+                parsed.author, parsed.coverPath, JSONArray(parsed.spine).toString(), true, tmp.length(), 0,
+                favorite = existing?.favorite ?: false, contentRevision = revision, tocJson = parsed.tocJson, localOnly = true, addedAt = System.currentTimeMillis()))
+            id
+        } catch (e: Exception) { bookDir?.deleteRecursively(); throw e } finally { tmp.delete() }
+    } }
 
     suspend fun removeMissingBook(id: String) = libraryMutex.withLock {
         val entity = bookDao.getById(id) ?: return@withLock
@@ -296,12 +332,12 @@ class BookRepository @Inject constructor(
      * zusätzlich in die lokale DB gespiegelt, damit die UI ihn sofort zeigt.
      */
     suspend fun syncProgress(bookId: String): Boolean = progressLocks.getOrPut(bookId) { Mutex() }.withLock {
+        val entity = bookDao.getById(bookId)
+        if (entity?.localOnly == true) { progressRepo.read(bookId)?.let { progressRepo.acknowledge(it) }; return@withLock true }
         val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
         if (connectivity.activeNetwork == null || (settingsRepo.wifiOnly.first() && connectivity.isActiveNetworkMetered)) return@withLock false
         val settings = settingsRepo.currentNextcloudSettings()
         if (!settings.isConfigured) return@withLock false
-        val entity = bookDao.getById(bookId)
-        if (entity?.localOnly == true) { progressRepo.read(bookId)?.let { progressRepo.acknowledge(it) }; return@withLock true }
         val remotePath = progressFilePath(settings, bookId)
 
         val merged = nextcloudClient.syncProgress(settings, remotePath, bookId) {

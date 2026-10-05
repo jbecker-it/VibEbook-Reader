@@ -55,6 +55,7 @@ class SettingsRepository @Inject constructor(
             serverUrl = p[Keys.SERVER].orEmpty(),
             username = p[Keys.USER].orEmpty(),
             password = cipher.decrypt(p[Keys.PASS].orEmpty()),
+            davUser = p[stringPreferencesKey("nextcloud_dav_user")].orEmpty(),
             rootPath = p[Keys.ROOT].orEmpty(),
             progressDir = p[Keys.PROGRESS_DIR] ?: ".folio-progress",
         )
@@ -164,6 +165,7 @@ class SettingsRepository @Inject constructor(
         context.dataStore.edit { p ->
             p[Keys.SERVER] = s.serverUrl.trim().trimEnd('/')
             p[Keys.USER] = s.username.trim()
+            p[stringPreferencesKey("nextcloud_dav_user")] = s.davUser
             p[Keys.PASS] = encrypted
             p[Keys.ROOT] = NextcloudSettings.segments(s.rootPath).joinToString("/")
             p[Keys.PROGRESS_DIR] = NextcloudSettings.segments(s.progressDir).joinToString("/")
@@ -193,10 +195,8 @@ class SettingsRepository @Inject constructor(
 
     /** Liefert (und erzeugt einmalig) eine stabile, anonyme Geräte-ID. */
     suspend fun deviceId(): String {
-        val existing = context.dataStore.data.map { it[Keys.DEVICE_ID] }.first()
-        if (existing != null) return existing
-        val generated = "device-" + UUID.randomUUID().toString().take(8)
-        context.dataStore.edit { it[Keys.DEVICE_ID] = generated }
-        return generated
+        var result = ""
+        context.dataStore.edit { p -> result = p[Keys.DEVICE_ID] ?: ("device-" + UUID.randomUUID()); p[Keys.DEVICE_ID] = result }
+        return result
     }
 }
