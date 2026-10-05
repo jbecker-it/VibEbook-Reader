@@ -157,6 +157,7 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
             '<p>This is an original paragraph for pagination regression testing.</p>'.repeat(150) + '</body></html>',false);
         assert.equal(await page.evaluate(() => __folio.fixed),false);
         assert.ok(await page.evaluate(() => __folio.screens>1));
+        assert.ok(await page.evaluate(() => __folio.anchor>=0),'The first page of a new text chapter needs an anchor');
         await page.evaluate(() => __folio.next());
         assert.equal(await page.evaluate(() => __folio.screen),1);
         const anchor = await page.evaluate(() => __folio.anchor);

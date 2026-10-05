@@ -1007,6 +1007,10 @@ internal fun buildInjection(
             if (fromUser) {
                 F.clearResumeMarker();
                 F.anchor = F.offsetForPage(i);
+            } else if (F.anchor < 0 && F.textLen > 0) {
+                // Initialize a new chapter's first page without inventing a reading timestamp.
+                // The original resumeOffset remains unknown for legacy saved positions.
+                F.anchor = F.offsetForPage(i);
             }
             window.scrollTo({
                 left: i * F.step,
