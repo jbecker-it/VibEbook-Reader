@@ -805,19 +805,19 @@ internal fun buildInjection(
             var overlay = document.getElementById('folio-resume-marker');
             if (overlay && F.resumeMarkerKey === key) return;
             if (overlay) overlay.remove();
-            overlay = document.createElement('div'); overlay.id = 'folio-resume-marker';
+            overlay = document.createElement('folio-resume-overlay'); overlay.id = 'folio-resume-marker';
             overlay.setAttribute('role', 'note');
             overlay.setAttribute('aria-label', range ? 'Letzte Lesestelle: ' + range.toString() : 'Zuletzt gelesene Seite');
             overlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646;';
             if (rects.length) rects.forEach(function(r) {
-                var box = document.createElement('div'); box.setAttribute('aria-hidden', 'true');
-                box.style.cssText = 'position:absolute;box-sizing:border-box;outline:2px solid $textHex;background:rgba(128,128,128,.18);' +
+                var box = document.createElement('folio-resume-word'); box.setAttribute('aria-hidden', 'true');
+                box.style.cssText = 'position:absolute;box-sizing:border-box;outline:2px solid $textHex;background:rgba(128,128,128,.18)!important;' +
                     'left:' + r[0] + 'px;top:' + r[1] + 'px;width:' + r[2] + 'px;height:' + r[3] + 'px;';
                 overlay.appendChild(box);
             });
             else {
-                var label = document.createElement('div'); label.textContent = 'Hier weiterlesen';
-                label.style.cssText = 'position:absolute;top:12px;left:12px;padding:6px 10px;background:#fff;color:#000;border:2px solid #000;font:16px sans-serif;';
+                var label = document.createElement('folio-resume-label'); label.textContent = 'Hier weiterlesen';
+                label.style.cssText = 'position:absolute;top:12px;left:12px;padding:6px 10px;background:#fff!important;color:#000!important;border:2px solid #000;font:16px sans-serif;';
                 overlay.appendChild(label);
             }
             // Outside body: never include the badge in the chapter's text index or publisher transform.

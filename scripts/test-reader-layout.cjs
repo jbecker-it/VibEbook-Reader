@@ -9,7 +9,7 @@ function injection(fixed = null, options = {}) {
         'preferences.leftHanded': 'false',
         'if (preferences.wideTapZones) "0.4" else "0.3"': '0.4',
         'jsString(restoreFragment)': JSON.stringify(options.fragment || ''),
-        'jsString(colorRules)': JSON.stringify('html,body{color:#000!important;background:#fff!important;}'),
+        'jsString(colorRules)': JSON.stringify('html,body{color:#000!important;background:#fff!important;}p,div,span,li,td,th,h1,h2,h3,h4,h5,h6,blockquote,figcaption{color:#000!important;background-color:transparent!important;}'),
         'fixedLayout?.toString() ?: "null"': String(fixed),
         'preferences.margin': '24', 'preferences.fontSize': String(options.fontSize || 32),
         'if (preferences.sansSerif) "sans-serif" else "serif"': 'serif',
@@ -218,6 +218,7 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
             assert.equal(await page.evaluate(() => __folio.resumeWordRange().toString()),'Geräteübergreifend');
             assert.equal(await page.evaluate(() => __folio.anchor),wordAnchor);
             assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker').children.length),1,'Inline formatting must share one frame on the same line');
+            assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('folio-resume-marker').firstElementChild).backgroundColor),'rgba(128, 128, 128, 0.18)','Reader colors must preserve the marker background');
             assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('folio-resume-marker')).pointerEvents),'none');
             fs.mkdirSync('app/build/reports', {recursive:true});
             if (segmenter) await page.screenshot({path:'app/build/reports/reader-resume.png'});
@@ -236,6 +237,11 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
             await page.evaluate(injection(fixed,{marker:true})); await page.evaluate(() => __folio.layout());
             assert.equal(await page.evaluate(() => document.querySelector('#folio-resume-marker').textContent),'Hier weiterlesen');
             assert.equal(await page.evaluate(() => document.querySelector('#folio-resume-marker').parentElement===document.documentElement),true);
+            await page.evaluate(() => {
+                const style=document.createElement('style');style.textContent='div,span{color:white!important;background:transparent!important;width:100%!important}';document.head.appendChild(style);
+            });
+            assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#folio-resume-marker').firstElementChild).color),'rgb(0, 0, 0)');
+            assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#folio-resume-marker').firstElementChild).backgroundColor),'rgb(255, 255, 255)');
             await page.evaluate(() => __folio.prev());
             assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null);
         }
