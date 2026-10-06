@@ -2,14 +2,16 @@ package de.folio.reader.ui
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.view.View
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
 import de.folio.reader.domain.model.Book
 import de.folio.reader.domain.model.ThemeMode
@@ -32,7 +34,7 @@ import java.io.File
 @Config(application = Application::class, sdk = [28], qualifiers = "w360dp-h800dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CompactUiTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val error = "Serverantwort: Die Buchdatei konnte nicht heruntergeladen werden. Bitte Verbindung prüfen."
     private fun book(downloaded: Boolean = true) = Book("book", "Roman.epub", "Ein langer Buchtitel", "Autor", null, emptyList(), downloaded, 1234567, null, downloadError = error)
 
@@ -96,8 +98,13 @@ class CompactUiTest {
     }
 
     private fun screenshot(name: String) {
-        val image = compose.onRoot().captureToImage().asAndroidBitmap()
-        val target = File("build/reports/ui/$name.png").apply { parentFile.mkdirs() }
+        // PixelCopy/captureToImage waits for an absent hardware frame in Robolectric.
+        // Draw the real Compose view to the native Android bitmap canvas instead.
+        val image = compose.runOnIdle {
+            val content = compose.activity.findViewById<View>(android.R.id.content)
+            Bitmap.createBitmap(content.width, content.height, Bitmap.Config.ARGB_8888).also { content.draw(Canvas(it)) }
+        }
+        val target = File("build/reports/ui/$name.png").apply { parentFile?.mkdirs() }
         target.outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
     }
 }

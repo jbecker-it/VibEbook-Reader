@@ -139,7 +139,9 @@ fun ReaderScreen(
             text = { Column {
                 TabRow(selectedTabIndex = navigationTab) {
                     listOf("Inhalt", "Lesezeichen", "Verlauf").forEachIndexed { index, label ->
-                        Tab(selected = navigationTab == index, onClick = { navigationTab = index }, text = { Text(label, maxLines = 1, style = MaterialTheme.typography.labelMedium) })
+                        Tab(selected = navigationTab == index, onClick = { navigationTab = index }) {
+                            Text(label, Modifier.padding(horizontal = 2.dp, vertical = 16.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium)
+                        }
                     }
                 }
                 androidx.compose.runtime.key(navigationTab) {
