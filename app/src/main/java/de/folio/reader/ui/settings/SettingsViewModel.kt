@@ -53,6 +53,8 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val _update = MutableStateFlow<de.folio.reader.data.nextcloud.UpdateClient.Update?>(null); val update = _update.asStateFlow()
+    fun dismissMessage() { _message.value = null }
+
     fun checkUpdate() = action { _update.value = updateClient.check(); _message.value = if (_update.value == null) "Version ${de.folio.reader.BuildConfig.VERSION_NAME} ist aktuell." else "Neue Version verfügbar." }
     val libraryBound = settingsRepository.libraryBound.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     val autoDownload = settingsRepository.autoDownload.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)

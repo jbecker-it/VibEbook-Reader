@@ -70,6 +70,8 @@ dependencies {
     implementation(libs.androidx.material3.window.size)
     implementation(libs.androidx.navigation.compose)
     debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
 
     // Persistence
     implementation(libs.androidx.room.runtime)

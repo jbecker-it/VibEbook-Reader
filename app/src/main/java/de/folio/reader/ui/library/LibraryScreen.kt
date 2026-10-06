@@ -1,6 +1,8 @@
 package de.folio.reader.ui.library
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +28,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.FilterList
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Folder
@@ -33,19 +40,9 @@ import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sync
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.*
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -98,10 +95,44 @@ fun LibraryScreen(
     val sort by viewModel.sort.collectAsStateWithLifecycle()
     val offlineOnly by viewModel.offlineOnly.collectAsStateWithLifecycle()
     val readFilter by viewModel.readFilter.collectAsStateWithLifecycle()
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    var filterVisible by rememberSaveable { mutableStateOf(false) }
+    var menuExpanded by remember { mutableStateOf(false) }
+    val snackbar = remember { SnackbarHostState() }
     var syncDetails by remember { mutableStateOf(false) }
-    if (syncDetails) androidx.compose.material3.AlertDialog(onDismissRequest = { syncDetails = false }, title = { Text("Synchronisierung") }, text = { Text(syncStatus.message ?: "Lokal gespeichert") }, confirmButton = { androidx.compose.material3.TextButton(onClick = { syncDetails = false }) { Text("Schließen") } })
+    if (syncDetails) androidx.compose.material3.AlertDialog(onDismissRequest = { syncDetails = false }, title = { Text("Synchronisierung") }, text = { Text(syncStatus.message ?: "Lokal gespeichert", Modifier.verticalScroll(rememberScrollState())) }, confirmButton = { androidx.compose.material3.TextButton(onClick = { syncDetails = false }) { Text("Schließen") } })
     val openedBook by viewModel.openedBook.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
+    LaunchedEffect(notice) {
+        notice?.let { value ->
+            if (snackbar.showSnackbar(value, actionLabel = "Rückgängig", withDismissAction = true) == SnackbarResult.ActionPerformed) viewModel.undoLast()
+            else viewModel.dismissNotice(value)
+        }
+    }
+    actionError?.let { error ->
+        AlertDialog(onDismissRequest = viewModel::dismissActionError, title = { Text("Aktion fehlgeschlagen") },
+            text = { Text(error, Modifier.verticalScroll(rememberScrollState())) },
+            confirmButton = { TextButton(onClick = viewModel::dismissActionError) { Text("Schließen") } })
+    }
+    if (filterVisible) {
+        AlertDialog(onDismissRequest = { filterVisible = false }, title = { Text("Sortieren und filtern") },
+            text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Sortierung", fontWeight = FontWeight.SemiBold)
+                listOf("Titel", "Zuletzt gelesen", "Zuletzt hinzugefügt").forEach { value ->
+                    TextButton(onClick = { viewModel.selectSort(value) }, modifier = Modifier.fillMaxWidth()) { Text((if (sort == value) "✓ " else "") + value) }
+                }
+                HorizontalDivider()
+                Text("Lesestatus", fontWeight = FontWeight.SemiBold)
+                Row { listOf("Alle", "Ungelesen", "Gelesen").forEach { value ->
+                    TextButton(onClick = { viewModel.selectReadFilter(value) }) { Text((if (readFilter == value) "✓ " else "") + value) }
+                } }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Nur heruntergeladene Bücher", Modifier.weight(1f))
+                    Switch(checked = offlineOnly, onCheckedChange = { viewModel.toggleOfflineFilter() })
+                }
+            } }, confirmButton = { TextButton(onClick = { filterVisible = false }) { Text("Fertig") } },
+            dismissButton = { TextButton(onClick = { viewModel.selectSort("Titel"); viewModel.selectReadFilter("Alle"); if (offlineOnly) viewModel.toggleOfflineFilter() }) { Text("Zurücksetzen") } })
+    }
     androidx.compose.runtime.LaunchedEffect(openedBook) { openedBook?.let { viewModel.consumedOpenedBook(); onBookSelected(it) } }
     val gridStates = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri -> uri?.let(viewModel::importBook) }
@@ -124,12 +155,17 @@ fun LibraryScreen(
         viewModel.navigateUp()
     }
 
+    BackHandler(enabled = searchVisible) { searchVisible = false; viewModel.search("") }
+
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Folio", fontWeight = FontWeight.SemiBold) },
                 actions = {
+                    IconButton(onClick = { searchVisible = !searchVisible; if (!searchVisible) viewModel.search("") }) { Icon(Icons.Outlined.Search, "Suchen") }
+                    IconButton(onClick = { filterVisible = true }) { Icon(Icons.Outlined.FilterList, "Sortieren und filtern") }
                     IconButton(
                         onClick = { viewModel.syncNow() },
                         enabled = isConfigured && !syncStatus.running,
@@ -143,9 +179,16 @@ fun LibraryScreen(
                             Icon(Icons.Outlined.Sync, contentDescription = "Synchronisieren")
                         }
                     }
-                    androidx.compose.material3.TextButton(onClick = { importLauncher.launch(arrayOf("application/epub+zip", "application/vnd.comicbook+zip", "application/zip", "application/x-cbz")) }) { Text("Import") }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Outlined.Settings, contentDescription = "Einstellungen")
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Outlined.MoreVert, "Weitere Aktionen") }
+                        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                            reading.firstOrNull { it.downloaded }?.let { latest ->
+                                DropdownMenuItem(text = { Text("Weiterlesen", maxLines = 1) }, onClick = { menuExpanded = false; onBookSelected(latest.id) })
+                            }
+                            DropdownMenuItem(text = { Text("Buch importieren") }, onClick = { menuExpanded = false; importLauncher.launch(arrayOf("application/epub+zip", "application/vnd.comicbook+zip", "application/zip", "application/x-cbz")) })
+                            DropdownMenuItem(text = { Text("Synchronisierungsdetails") }, onClick = { menuExpanded = false; syncDetails = true })
+                            DropdownMenuItem(text = { Text("Einstellungen") }, leadingIcon = { Icon(Icons.Outlined.Settings, null) }, onClick = { menuExpanded = false; onOpenSettings() })
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -156,19 +199,21 @@ fun LibraryScreen(
         },
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
-            Box(Modifier.fillMaxWidth().height(64.dp).clickable { syncDetails = true }) {
-                SyncBanner(syncStatus.copy(message = syncStatus.message?.lineSequence()?.firstOrNull()), eInk)
+            val statusMessage = syncStatus.message.orEmpty()
+            if (syncStatus.running || (statusMessage.isNotBlank() && statusMessage != "Lokal gespeichert" && !statusMessage.startsWith("Synchronisiert um "))) {
+                Box(Modifier.fillMaxWidth().clickable { syncDetails = true }) { SyncBanner(syncStatus, eInk) }
             }
-            actionError?.let { Text(it, modifier = Modifier.padding(16.dp)) }
-            notice?.let { Row(verticalAlignment = Alignment.CenterVertically) { Text(it, Modifier.weight(1f).padding(start = 16.dp)); androidx.compose.material3.TextButton(onClick = viewModel::undoLast) { Text("Rückgängig") } } }
-            if (books.isNotEmpty()) {
-                androidx.compose.material3.OutlinedTextField(value = query, onValueChange = viewModel::search, singleLine = true,
-                    label = { Text("Titel, Autor oder Ordner suchen") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
-                Row { androidx.compose.material3.TextButton(onClick = viewModel::cycleSort) { Text("Sortierung: $sort") }
-                    androidx.compose.material3.TextButton(onClick = viewModel::toggleOfflineFilter) { Text(if (offlineOnly) "✓ Offline" else "Offline") } }
-                androidx.compose.material3.TextButton(onClick = viewModel::cycleReadFilter) { Text("Status: $readFilter") }
+            if (searchVisible) {
+                OutlinedTextField(value = query, onValueChange = viewModel::search, singleLine = true,
+                    label = { Text("Titel, Autor oder Ordner") },
+                    trailingIcon = { IconButton(onClick = { searchVisible = false; viewModel.search("") }) { Icon(Icons.Outlined.Close, "Suche schließen") } },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            if (!isConfigured && books.isNotEmpty()) Text("Offline-Bibliothek · Nextcloud in den Einstellungen verbinden", modifier = Modifier.padding(16.dp))
+            if (sort != "Titel" || readFilter != "Alle" || offlineOnly) {
+                TextButton(onClick = { filterVisible = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(listOfNotNull(sort.takeIf { it != "Titel" }, readFilter.takeIf { it != "Alle" }, "Offline".takeIf { offlineOnly }).joinToString(" · "), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
 
             when {
                 !isConfigured && books.isEmpty() -> EmptyState(
@@ -189,12 +234,6 @@ fun LibraryScreen(
                 )
 
                 else -> {
-                    reading.firstOrNull { it.downloaded }?.let { latest ->
-                        androidx.compose.material3.OutlinedButton(
-                            onClick = { onBookSelected(latest.id) },
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        ) { Text("Weiterlesen: ${latest.title}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                    }
                     TabRow(selectedTabIndex = tab.ordinal) {
                         LibraryTab.entries.forEach { t ->
                             Tab(
@@ -393,13 +432,26 @@ private fun FolderRow(folder: FolderItem, onClick: () -> Unit) {
 }
 
 @Composable
-private fun BookCard(
+internal fun BookCard(
     book: Book,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onToggleFinished: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    var menu by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf(false) }
+    if (details) {
+        AlertDialog(onDismissRequest = { details = false }, title = { Text(book.title) },
+            text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(book.relativePath)
+                Text("Datei: ${book.sizeBytes / (1024 * 1024)} MB" + if (book.downloaded) " · offline verfügbar" else " · nicht heruntergeladen")
+                if (book.localOnly) Text("Lokaler Import · ohne Cloud-Abgleich")
+                if (book.missingRemotely) Text("Nur lokal · nicht in Nextcloud gefunden")
+                if (book.downloadError.isNotBlank()) { Text("Downloadproblem", fontWeight = FontWeight.SemiBold); Text(book.downloadError) }
+            } }, confirmButton = { TextButton(onClick = { details = false }) { Text("Schließen") } },
+            dismissButton = { if (book.downloadError.isNotBlank()) TextButton(onClick = { details = false; onClick() }) { Text(if (book.downloaded) "Öffnen" else "Erneut laden") } })
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -442,6 +494,23 @@ private fun BookCard(
                         contentDescription = "Nicht heruntergeladen",
                         tint = Color.White,
                     )
+                }
+            }
+
+            Box(Modifier.align(Alignment.TopStart).padding(6.dp)) {
+                Surface(shape = CircleShape, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface)) {
+                    IconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.MoreVert, "Buchaktionen") }
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Buchdetails") }, onClick = { menu = false; details = true })
+                    if (book.downloadError.isNotBlank()) DropdownMenuItem(text = { Text("Downloadproblem") }, onClick = { menu = false; details = true })
+                    if (book.downloaded) DropdownMenuItem(text = { Text("Lokale Kopie entfernen") }, onClick = { menu = false; onRemove() })
+                }
+            }
+            if (book.downloadError.isNotBlank()) {
+                Surface(modifier = Modifier.align(Alignment.BottomStart).padding(6.dp), shape = CircleShape,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface)) {
+                    IconButton(onClick = { details = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.ErrorOutline, "Downloadproblem anzeigen") }
                 }
             }
 
@@ -515,13 +584,8 @@ private fun BookCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text("Datei: ${book.sizeBytes / (1024 * 1024)} MB" + if (book.downloaded) " · offline" else " · in Nextcloud", style = MaterialTheme.typography.bodySmall)
-        if (book.downloadError.isNotBlank()) Text(book.downloadError, style = MaterialTheme.typography.bodySmall)
-        if (book.localOnly) Text("Lokaler Import · ohne Cloud-Abgleich", style = MaterialTheme.typography.bodySmall)
-        if (book.missingRemotely) Text("Nur lokal · nicht in Nextcloud gefunden", style = MaterialTheme.typography.bodySmall)
-        if (book.downloaded) {
-            androidx.compose.material3.OutlinedButton(onClick = onRemove) { Text("Lokale Kopie entfernen") }
-        }
+        if (book.localOnly || book.missingRemotely) Text(if (book.localOnly) "Lokaler Import" else "Nur lokal", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+
     }
 }
 

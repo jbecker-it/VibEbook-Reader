@@ -1,5 +1,7 @@
 Folio für Android und E-Ink-Reader.
 
+- Kompakte Bibliothek: Suche und Filter bei Bedarf, Buchaktionen im ⋮-Menü, Downloadprobleme als kleines Symbol mit aufrufbaren Details.
+- Einstellungen mit sechs getrennten Bereichen und deutlich abgesetzten Gruppen. Lesemenü mit schmalen Leisten und getrennten Tabs für Inhalt, Lesezeichen und Verlauf.
 - Dauerhaft vorgemerkte Lesestände mit automatischem Wiederholen, konfliktfestem Nextcloud-Abgleich und lokalem Sofortöffnen.
 - Browser-Anmeldung, Ordnerauswahl und Schreibtest für Nextcloud; Fehler einzelner Bücher blockieren andere Downloads nicht.
 - EPUB-Inhaltsverzeichnis, Lesezeichen, Positionsverlauf und gesicherte Wiederaufnahme bei geänderter Buchfassung.

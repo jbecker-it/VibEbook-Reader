@@ -67,3 +67,9 @@ CI is necessary, not evidence that these physical-device checks passed.
 - Test Zoom with D-pad focus, moved controls, manual crop progression, reset, close/reopen and chapter change. Verify one actual page turn per gesture.
 - Export progress using Android SAF and reimport; confirm independent favorite/completion and no credentials in the JSON. Import local EPUB and CBZ via file picker and Nextcloud “Open with”.
 - Save a novel on one device, open on another with a different font/viewport and check the saved word's monochrome frame. Change font/orientation while the marker is shown; it must stay with that word without moving the reading position. The first page-turn removes it, and opening a menu or selecting text does not. Accept newer remote progress and repeat. Image-only/legacy-anchor pages show “Hier weiterlesen”; changed editions must not highlight an unrelated old character offset.
+
+## Kompakte Bedienoberfläche
+
+Compose/Robolectric prüft die Buchaktionen ohne dauerhafte Löschbuttons oder Fehlerabsätze, die sechs Einstellungen-Kategorien auf 360 dp Breite sowie die Höhe der Lesemenüleisten und bestätigte Kapitelsprünge. Screenshots der tatsächlichen Compose-Komponenten liegen im CI-Bericht unter `ui/`.
+
+Auf BOOX zusätzlich prüfen: Bibliothek zeigt im Ruhezustand nur Werkzeugleiste und Tabs; Suche lässt sich schließen; Filter zurücksetzen; Buchmenü öffnen, Fehlerdetails lesen und lokale Entfernung abbrechen. Einstellungen-Unterseiten öffnen und mit Zurück zur Übersicht wechseln; Nextcloud erneut anmelden/testen. Im Reader Kapitelwahl öffnen/abbrechen und Lesezeichen-/Verlauf-Tabs prüfen.

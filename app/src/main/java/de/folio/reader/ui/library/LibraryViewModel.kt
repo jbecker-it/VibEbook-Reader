@@ -53,15 +53,18 @@ class LibraryViewModel @Inject constructor(
     private val _sort = MutableStateFlow("Titel"); val sort = _sort.asStateFlow()
     private val _readFilter = MutableStateFlow("Alle"); val readFilter = _readFilter.asStateFlow()
     fun cycleReadFilter() { _readFilter.value = when (_readFilter.value) { "Alle" -> "Ungelesen"; "Ungelesen" -> "Gelesen"; else -> "Alle" } }
+    fun selectReadFilter(value: String) { if (value in listOf("Alle", "Ungelesen", "Gelesen")) _readFilter.value = value }
     private val _offlineOnly = MutableStateFlow(false); val offlineOnly = _offlineOnly.asStateFlow()
     fun search(value: String) { _query.value = value }
     fun cycleSort() { _sort.value = when (_sort.value) { "Titel" -> "Zuletzt gelesen"; "Zuletzt gelesen" -> "Zuletzt hinzugefügt"; else -> "Titel" } }
+    fun selectSort(value: String) { if (value in listOf("Titel", "Zuletzt gelesen", "Zuletzt hinzugefügt")) _sort.value = value }
     fun toggleOfflineFilter() { _offlineOnly.value = !_offlineOnly.value }
     private fun rememberLocation() { viewModelScope.launch { settingsRepository.saveLibraryLocation(_tab.value.name, _currentFolder.value) } }
     private fun sorted(list: List<Book>, order: String): List<Book> = when (order) { "Zuletzt gelesen" -> list.sortedByDescending { maxOf(it.lastOpenedAt, it.progress?.updatedAt ?: 0) }; "Zuletzt hinzugefügt" -> list.sortedByDescending { it.addedAt }; else -> list.sortedBy { it.title.lowercase() } }
     private val mutationLock = kotlinx.coroutines.sync.Mutex()
     private var undo: (suspend () -> Unit)? = null
     private val _notice = MutableStateFlow<String?>(null); val notice = _notice.asStateFlow()
+    fun dismissNotice(value: String) { if (_notice.value == value) _notice.value = null }
     fun undoLast() { val action = undo ?: return; undo = null; runLibraryAction(serial = true) { action(); _notice.value = null } }
 
     val books: StateFlow<List<Book>> = bookRepository.observeBooks()
@@ -141,6 +144,7 @@ class LibraryViewModel @Inject constructor(
 
     private val _actionError = MutableStateFlow<String?>(null)
     val actionError = _actionError.asStateFlow()
+    fun dismissActionError() { _actionError.value = null }
 
     fun removeMissingBook(id: String) = runLibraryAction { bookRepository.removeLocalCopy(id) }
     fun importBook(uri: android.net.Uri) = runLibraryAction { _openedBook.value = bookRepository.importLocal(uri) }

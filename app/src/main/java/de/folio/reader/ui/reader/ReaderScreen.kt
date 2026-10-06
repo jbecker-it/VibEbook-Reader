@@ -32,17 +32,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
-import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.DisposableEffect
@@ -112,6 +107,8 @@ fun ReaderScreen(
     var menuVisible by rememberSaveable { mutableStateOf(false) }
     var typographyVisible by remember { mutableStateOf(false) }
     var bookmarkTitle by remember { mutableStateOf("") }
+    var bookmarkVisible by remember { mutableStateOf(false) }
+    var navigationTab by rememberSaveable { mutableStateOf(0) }
     var navigationVisible by remember { mutableStateOf(false) }
     var externalLink by remember { mutableStateOf<String?>(null) }
     val linkContext = androidx.compose.ui.platform.LocalContext.current
@@ -130,34 +127,58 @@ fun ReaderScreen(
             text = { Text(state.error ?: "Die Datei wurde ersetzt. Der Stand wird über Kapitel und Prozent wiederhergestellt; bitte die genaue Stelle prüfen.") },
             confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.saveNow(); viewModel.clearError() }) { Text("OK") } })
     }
+    if (bookmarkVisible) {
+        AlertDialog(onDismissRequest = { bookmarkVisible = false }, title = { Text("Lesezeichen setzen") },
+            text = { OutlinedTextField(value = bookmarkTitle, onValueChange = { bookmarkTitle = it.take(120) }, singleLine = true, label = { Text("Name (optional)") }) },
+            confirmButton = { TextButton(onClick = { viewModel.addBookmark(bookmarkTitle); bookmarkTitle = ""; bookmarkVisible = false }) { Text("Speichern") } },
+            dismissButton = { TextButton(onClick = { bookmarkVisible = false }) { Text("Abbrechen") } })
+    }
     if (navigationVisible) {
         val toc = remember(state.book?.tocJson) { org.json.JSONArray(state.book?.tocJson ?: "[]") }
-        androidx.compose.material3.AlertDialog(onDismissRequest = { navigationVisible = false }, title = { Text("Inhalt und Lesezeichen") },
-            text = { androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * .5f).dp)) {
-                item { androidx.compose.material3.OutlinedTextField(value = bookmarkTitle, onValueChange = { bookmarkTitle = it.take(120) }, singleLine = true, label = { Text("Lesezeichenname (optional)") }) }
-                item { androidx.compose.material3.TextButton(onClick = { viewModel.addBookmark(bookmarkTitle); bookmarkTitle = "" }, enabled = state.linkedDocument == null) { Text("Hier ein Lesezeichen setzen") } }
-                item { androidx.compose.material3.TextButton(onClick = viewModel::setFinished) { Text(if (state.book?.progress?.finished == true) "Als ungelesen markieren" else "Als gelesen markieren") } }
-                item { if (state.returnPosition != null) androidx.compose.material3.TextButton(onClick = { viewModel.returnToPosition(); navigationVisible = false }) { Text("Zur vorherigen Lesestelle") } }
-                item { Text("Lesezeichen") }
-                items(state.bookmarks.size) { index -> val bookmark = state.bookmarks[index]; val p = bookmark.position; Row {
-                    androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text(bookmark.title) }
-                    androidx.compose.material3.TextButton(onClick = { viewModel.removeBookmark(index) }) { Text("×") }
-                } }
-                item { Text("Letzte Positionen") }
-                items(minOf(state.history.size, 10)) { index -> val p = state.history[index]; androidx.compose.material3.TextButton(onClick = { viewModel.restore(p); navigationVisible = false }) { Text("Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).roundToInt()} %") } }
-                item { Text("Inhaltsverzeichnis") }
-                if (toc.length() == 0) items(state.book?.spine?.size ?: 0) { i -> androidx.compose.material3.TextButton(onClick = { viewModel.goToChapter(i, rememberReturn = true); navigationVisible = false }) { Text("Kapitel ${i + 1}") } }
-                else items(toc.length()) { i -> val item = toc.getJSONObject(i)
-                    androidx.compose.material3.TextButton(onClick = { viewModel.openLink(item.getString("path"), item.optString("fragment")); navigationVisible = false }) { Text("  ".repeat(item.optInt("depth").coerceIn(0, 8)) + item.getString("label")) }
+        AlertDialog(onDismissRequest = { navigationVisible = false }, title = { Text("Im Buch") },
+            text = { Column {
+                TabRow(selectedTabIndex = navigationTab) {
+                    listOf("Inhalt", "Lesezeichen", "Verlauf").forEachIndexed { index, label ->
+                        Tab(selected = navigationTab == index, onClick = { navigationTab = index }, text = { Text(label, maxLines = 1, style = MaterialTheme.typography.labelMedium) })
+                    }
                 }
-            } }, confirmButton = { androidx.compose.material3.TextButton(onClick = { navigationVisible = false }) { Text("Schließen") } })
+                androidx.compose.runtime.key(navigationTab) {
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * .4f).coerceIn(160f, 360f).dp)) {
+                        when (navigationTab) {
+                            0 -> {
+                                if (toc.length() == 0) items(state.book?.spine?.size ?: 0) { i -> TextButton(onClick = { viewModel.goToChapter(i, rememberReturn = true); navigationVisible = false }, modifier = Modifier.fillMaxWidth()) { Text("Kapitel ${i + 1}") } }
+                                else items(toc.length()) { i -> val item = toc.getJSONObject(i)
+                                    TextButton(onClick = { viewModel.openLink(item.getString("path"), item.optString("fragment")); navigationVisible = false }, modifier = Modifier.fillMaxWidth()) { Text("  ".repeat(item.optInt("depth").coerceIn(0, 8)) + item.getString("label")) }
+                                }
+                            }
+                            1 -> {
+                                item { TextButton(onClick = { navigationVisible = false; bookmarkVisible = true }, enabled = state.linkedDocument == null, modifier = Modifier.fillMaxWidth()) { Text("Hier ein Lesezeichen setzen") } }
+                                if (state.bookmarks.isEmpty()) item { Text("Noch keine Lesezeichen", Modifier.padding(16.dp)) }
+                                items(state.bookmarks.size) { index -> val bookmark = state.bookmarks[index]
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        TextButton(onClick = { viewModel.restore(bookmark.position); navigationVisible = false }, modifier = Modifier.weight(1f)) { Text(bookmark.title) }
+                                        IconButton(onClick = { viewModel.removeBookmark(index) }) { Icon(Icons.Outlined.DeleteOutline, "Lesezeichen löschen") }
+                                    }
+                                }
+                            }
+                            2 -> {
+                                item { if (state.returnPosition != null) TextButton(onClick = { viewModel.returnToPosition(); navigationVisible = false }, modifier = Modifier.fillMaxWidth()) { Text("Zur vorherigen Lesestelle") } }
+                                if (state.history.isEmpty()) item { Text("Noch kein Verlauf", Modifier.padding(16.dp)) }
+                                items(minOf(state.history.size, 10)) { index -> val p = state.history[index]
+                                    TextButton(onClick = { viewModel.restore(p); navigationVisible = false }, modifier = Modifier.fillMaxWidth()) { Text("Kapitel ${p.spineIndex + 1} · ${(p.scrollFraction * 100).roundToInt()} %") }
+                                }
+                            }
+                        }
+                    }
+                }
+            } }, confirmButton = { TextButton(onClick = { navigationVisible = false }) { Text("Schließen") } })
     }
     if (typographyVisible) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { typographyVisible = false },
             title = { Text("Schrift und Darstellung") },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Darstellung für dieses Buch")
                     de.folio.reader.domain.model.BookLayoutMode.entries.forEach { mode ->
                         androidx.compose.material3.TextButton(onClick = { viewModel.setLayoutMode(mode) }) {
@@ -267,8 +288,12 @@ fun ReaderScreen(
                 favorite = state.favorite,
                 onBack = onBack,
                 onToggleFavorite = viewModel::toggleFavorite,
+                finished = state.book?.progress?.finished == true,
+                onToggleFinished = viewModel::setFinished,
+                onBookmark = { bookmarkVisible = true },
+                canBookmark = state.linkedDocument == null,
                 onTypography = { typographyVisible = true },
-                onNavigation = { viewModel.refreshNavigation(); navigationVisible = true },
+                onNavigation = { navigationTab = 0; viewModel.refreshNavigation(); navigationVisible = true },
             )
         }
 
@@ -291,14 +316,19 @@ fun ReaderScreen(
 }
 
 @Composable
-private fun TopOverlay(
+internal fun TopOverlay(
     title: String,
     favorite: Boolean,
+    finished: Boolean,
+    canBookmark: Boolean,
+    onToggleFinished: () -> Unit,
+    onBookmark: () -> Unit,
     onBack: () -> Unit,
     onToggleFavorite: () -> Unit,
     onTypography: () -> Unit,
     onNavigation: () -> Unit,
 ) {
+    var menu by remember { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
@@ -313,8 +343,6 @@ private fun TopOverlay(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Zurück")
             }
-            androidx.compose.material3.TextButton(onClick = onTypography) { Text("Aa") }
-            androidx.compose.material3.TextButton(onClick = onNavigation) { Text("Inhalt") }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
@@ -323,20 +351,22 @@ private fun TopOverlay(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(onClick = onToggleFavorite) {
-                Icon(
-                    imageVector = if (favorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = if (favorite) "Aus Favoriten entfernen" else "Zu Favoriten",
-                    tint = if (favorite) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface,
-                )
+            IconButton(onClick = onTypography) { Text("Aa", style = MaterialTheme.typography.titleMedium) }
+            IconButton(onClick = onNavigation) { Icon(Icons.AutoMirrored.Outlined.List, "Inhaltsverzeichnis") }
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Weitere Buchaktionen") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text(if (favorite) "Aus Favoriten entfernen" else "Zu Favoriten") }, onClick = { menu = false; onToggleFavorite() })
+                    DropdownMenuItem(text = { Text(if (finished) "Als ungelesen markieren" else "Als gelesen markieren") }, onClick = { menu = false; onToggleFinished() })
+                    DropdownMenuItem(text = { Text("Lesezeichen setzen") }, enabled = canBookmark, onClick = { menu = false; onBookmark() })
+                }
             }
         }
     }
 }
 
 @Composable
-private fun BottomOverlay(
+internal fun BottomOverlay(
     spineIndex: Int,
     spineCount: Int,
     chapterFraction: Float,
@@ -347,45 +377,23 @@ private fun BottomOverlay(
     val percent = (((spineIndex + chapterFraction) / spineCount.coerceAtLeast(1)) * 100f)
         .roundToInt().coerceIn(0, 100)
 
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 0.dp,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                IconButton(onClick = onPrev, enabled = spineIndex > 0) {
-                    Icon(Icons.Outlined.ChevronLeft, contentDescription = "Vorheriges Kapitel")
-                }
-                Text(
-                    text = "Kapitel ${spineIndex + 1} / $spineCount  ·  $percent %",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                IconButton(onClick = onNext, enabled = spineIndex < spineCount - 1) {
-                    Icon(Icons.Outlined.ChevronRight, contentDescription = "Nächstes Kapitel")
-                }
+    var seekVisible by remember { mutableStateOf(false) }
+    var sliderPosition by remember(spineIndex) { mutableFloatStateOf(spineIndex.toFloat()) }
+    if (seekVisible && spineCount > 1) {
+        AlertDialog(onDismissRequest = { seekVisible = false }, title = { Text("Kapitel wählen") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("Kapitel ${sliderPosition.roundToInt() + 1} / $spineCount")
+                Slider(value = sliderPosition, onValueChange = { sliderPosition = it }, valueRange = 0f..(spineCount - 1).toFloat(), steps = (spineCount - 2).coerceAtLeast(0))
+            } }, confirmButton = { TextButton(onClick = { onSeekChapter(sliderPosition.roundToInt()); seekVisible = false }) { Text("Öffnen") } },
+            dismissButton = { TextButton(onClick = { seekVisible = false }) { Text("Abbrechen") } })
+    }
+    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+        Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onPrev, enabled = spineIndex > 0) { Icon(Icons.Outlined.ChevronLeft, "Vorheriges Kapitel") }
+            TextButton(onClick = { sliderPosition = spineIndex.toFloat(); seekVisible = true }, enabled = spineCount > 1, modifier = Modifier.weight(1f)) {
+                Text("Kapitel ${spineIndex + 1} / $spineCount  ·  $percent %", maxLines = 1, style = MaterialTheme.typography.labelLarge, overflow = TextOverflow.Ellipsis)
             }
-            if (spineCount > 1) {
-                var sliderPosition by remember(spineIndex) {
-                    mutableFloatStateOf(spineIndex.toFloat())
-                }
-                Slider(
-                    value = sliderPosition,
-                    onValueChange = { sliderPosition = it },
-                    onValueChangeFinished = { onSeekChapter(sliderPosition.roundToInt()) },
-                    valueRange = 0f..(spineCount - 1).toFloat(),
-                    steps = (spineCount - 2).coerceAtLeast(0),
-                )
-            }
+            IconButton(onClick = onNext, enabled = spineIndex < spineCount - 1) { Icon(Icons.Outlined.ChevronRight, "Nächstes Kapitel") }
         }
     }
 }
