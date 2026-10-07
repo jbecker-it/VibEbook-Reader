@@ -11,7 +11,7 @@ function injection(fixed = null, options = {}) {
         'jsString(restoreFragment)': JSON.stringify(options.fragment || ''),
         'jsString(colorRules)': JSON.stringify('html,body{color:#000!important;background:#fff!important;}p,div,span,li,td,th,h1,h2,h3,h4,h5,h6,blockquote,figcaption{color:#000!important;background-color:transparent!important;}'),
         'fixedLayout?.toString() ?: "null"': String(fixed),
-        'preferences.margin': '24', 'preferences.fontSize': String(options.fontSize || 32),
+        'preferences.margin': String(options.margin ?? 24), 'preferences.fontSize': String(options.fontSize || 32),
         'if (preferences.sansSerif) "sans-serif" else "serif"': 'serif',
         'preferences.lineHeight': '2.2',
     };
@@ -181,6 +181,34 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
         assert.ok(await page.evaluate(() => events.every(e=>e===false)));
         await page.evaluate(() => __folio.next());
         assert.equal(await page.evaluate(() => events.at(-1)),true);
+
+        // Publisher rules must not change our column geometry after a turn. This also
+        // catches a last-page scroll clamp and fractional two-page column rounding.
+        const publisherNovel = `<html><head><style>
+            html body { margin: 1.5em auto; padding: 2em 4em; max-width: 28em;
+                width: 760px; height: auto; column-gap: 7em; box-sizing: content-box; }
+            p { font-style: italic; text-indent: 1em; }
+            </style></head><body>` + '<p>Lesetext mit verschiedenen Wörtern. Jeder Absatz muss vollständig auf die sichtbare Seite passen, auch nach dem Blättern.</p>'.repeat(100) + '</body></html>';
+        fs.mkdirSync('app/build/reports', {recursive:true});
+        for (const [width,height,margin,twoPage] of [[360,800,24,false],[401,800,8,true],[709,1536,48,false]]) {
+            await page.goto('about:blank'); await page.setViewportSize({width,height});
+            await page.setContent(publisherNovel);
+            await page.evaluate(injection(false,{margin,twoPage,fontSize:24}));
+            await page.evaluate(() => __folio.layout());
+            for (const turn of [1,2,'last']) {
+                const g = await page.evaluate(turn => {
+                    const f=__folio; f.setScreen(turn === 'last' ? f.screens-1 : turn,false,true);
+                    const css=getComputedStyle(document.body), rect=document.body.getBoundingClientRect();
+                    const first=f.rangeAtOffset(f.anchor).getBoundingClientRect();
+                    return {width:rect.width,step:f.step,screen:f.screen,screens:f.screens,scroll:scrollX,
+                        left:first.left,right:first.right,gap:parseFloat(css.columnGap),margin:parseFloat(css.marginLeft)};
+                },turn);
+                await page.screenshot({path:`app/build/reports/reader-publisher-${width}-${turn}.png`});
+                assert.ok(Math.abs(g.width-width)<1,`Publisher width overrides reader geometry: ${JSON.stringify(g)}`);
+                assert.ok(Math.abs(g.scroll-g.screen*g.step)<1,`Page must align after a turn: ${JSON.stringify(g)}`);
+                assert.ok(g.left>=margin-2 && g.left<=margin+80 && g.right<=width-margin+2,`First word clipped or neighbouring column visible: ${JSON.stringify(g)}`);
+            }
+        }
 
         // Cross-device resume: highlight the word containing the stored UTF-16 anchor,
         // including inline markup, without changing the chapter text or native selection.

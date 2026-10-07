@@ -340,7 +340,10 @@ class BookRepository @Inject constructor(
      * wird auf die jeweils veraltete Seite geschrieben. Der Favorit wird
      * zusätzlich in die lokale DB gespiegelt, damit die UI ihn sofort zeigt.
      */
-    suspend fun syncProgress(bookId: String): Boolean = progressLocks.getOrPut(bookId) { Mutex() }.withLock {
+    suspend fun syncProgress(bookId: String): Boolean {
+        // Reject incomplete navigation IDs before issuing a request for ".json" on the server.
+        require(bookId.matches(Regex("[a-f0-9]{32}"))) { "Ungültige Buch-ID." }
+        return progressLocks.getOrPut(bookId) { Mutex() }.withLock {
         val entity = bookDao.getById(bookId)
         if (entity?.localOnly == true) { progressRepo.read(bookId)?.let { progressRepo.acknowledge(it) }; return@withLock true }
         val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
@@ -367,7 +370,8 @@ class BookRepository @Inject constructor(
                 bookDao.setFavorite(bookId, currentFavorite)
             }
         }
-        true
+            true
+        }
     }
 
     suspend fun syncAllProgress() = syncPendingProgress(true)

@@ -85,7 +85,11 @@ class ReaderViewModel @Inject constructor(
         observeJob?.invokeOnCompletion { cause -> if (cause != null && cause !is CancellationException) _state.update { it.copy(loading = false, error = cause.message) } }
     }
     fun bookRoot() = _state.value.book?.let { bookRepository.extractionRoot(it) }
-    fun refreshRemote() { action { withTimeoutOrNull(5_000) { bookRepository.syncProgress(id.value) } } }
+    fun refreshRemote() {
+        // ON_START may arrive before load's LaunchedEffect or before the book flow emits.
+        val bookId = _state.value.book?.id ?: return
+        action { withTimeoutOrNull(5_000) { bookRepository.syncProgress(bookId) } }
+    }
     fun acceptRemote() { val p = _state.value.remotePosition ?: return; restore(p, false); appliedPosition = p; _state.update { it.copy(remotePosition = null) } }
     fun dismissRemote() { appliedPosition = _state.value.remotePosition; _state.update { it.copy(remotePosition = null) } }
     fun clearError() { _state.update { it.copy(error = null, editionChanged = false) } }
@@ -122,7 +126,14 @@ class ReaderViewModel @Inject constructor(
     fun setLayoutMode(mode: BookLayoutMode) { _state.update { it.copy(layoutMode = mode) }; action { settingsRepository.setBookLayout(id.value, mode) } }
     fun toggleFavorite() = action { bookRepository.toggleFavorite(id.value) }
     fun setFinished() = action { bookRepository.setFinished(id.value, _state.value.book?.progress?.finished != true) }
-    fun refreshNavigation() = action { val history = bookRepository.history(id.value); val marks = settingsRepository.bookmarks(id.value); _state.update { it.copy(history = history, bookmarks = marks) } }
+    fun refreshNavigation() {
+        val bookId = _state.value.book?.id ?: return
+        action {
+            val history = bookRepository.history(bookId)
+            val marks = settingsRepository.bookmarks(bookId)
+            _state.update { if (it.book?.id == bookId) it.copy(history = history, bookmarks = marks) else it }
+        }
+    }
     fun addBookmark(title: String = "") = action { snapshot(System.currentTimeMillis())?.let { settingsRepository.addBookmark(it, title) }; refreshNavigation() }
     fun removeBookmark(index: Int) = action { settingsRepository.removeBookmark(id.value, index); refreshNavigation() }
     fun restore(p: ReadingProgress, save: Boolean = true) {

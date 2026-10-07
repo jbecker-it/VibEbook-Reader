@@ -54,6 +54,30 @@ class ReaderLifecycleTest {
         return vm to store
     }
     private suspend fun kotlinx.coroutines.flow.StateFlow<ReaderUiState>.firstLoaded() = first { !it.loading }
+    @Test fun lifecycleRefreshBeforeBookLoadNeverUsesAnEmptyId() = runBlocking {
+        val saved = ReadingProgress(id, 0, .4f, 40, 100, "other")
+        progress.write(saved, false)
+        val vm = ReaderViewModel(repository, settings, scope)
+        val store = ViewModelStore().apply { put("reader", vm) }
+        try {
+            // LifecycleRegistry dispatches ON_START while Compose's load effect is still pending.
+            vm.refreshRemote(); vm.refreshNavigation(); delay(100)
+            assertNull(vm.state.value.error)
+            vm.load(id)
+            vm.refreshRemote(); vm.refreshNavigation()
+            withTimeout(10000) { vm.state.firstLoaded() }
+            vm.refreshRemote(); vm.refreshNavigation(); delay(100)
+            assertNull(vm.state.value.error)
+            assertEquals(40, vm.state.value.restoreCharOffset)
+            assertEquals(saved, progress.read(id))
+        } finally { store.clear() }
+    }
+    @Test fun incompleteIdsAreRejectedBeforeNetworkOrProgressAccess() = runBlocking {
+        for (invalid in listOf("", "../outside", "null")) {
+            try { repository.syncProgress(invalid); fail("Incomplete IDs must not reach WebDAV") }
+            catch (e: IllegalArgumentException) { assertEquals("Ungültige Buch-ID.", e.message) }
+        }
+    }
     @Test fun reopeningUsesFreshProgressAndPassiveReportsDoNotSave() = runBlocking {
         progress.write(ReadingProgress(id, 0, .2f, 20, 100, "other"), false)
         val first = open(); assertEquals(20, first.first.state.value.restoreCharOffset); first.second.clear()
