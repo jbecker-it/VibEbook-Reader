@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<data-extraction-rules>
+<data-extraction-rules xmlns:tools="http://schemas.android.com/tools">
     <cloud-backup>
         <include domain="file" path="progress/" />
-        <exclude domain="file" path="books/" />
+        <!-- Deliberately retain explicit book exclusion alongside the progress-only allowlist. -->
+        <exclude domain="file" path="books/" tools:ignore="FullBackupContent" />
     </cloud-backup>
     <device-transfer>
         <include domain="file" path="progress/" />

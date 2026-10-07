@@ -16,13 +16,17 @@ import java.util.zip.ZipInputStream
 class EpubParser {
 
     /** Entpackt [epub] nach [targetDir] (wird zuvor geleert). */
-    fun extract(epub: File, targetDir: File) {
+    fun extract(epub: File, targetDir: File, maxBytes: Long = 2L * 1024 * 1024 * 1024, checkCanceled: () -> Unit = {}) {
         if (targetDir.exists()) targetDir.deleteRecursively()
         targetDir.mkdirs()
         epub.inputStream().use { raw ->
             ZipInputStream(raw.buffered()).use { zip ->
+                var total = 0L
+                var files = 0
                 var entry = zip.nextEntry
                 while (entry != null) {
+                    checkCanceled()
+                    require(++files <= 20000) { "Zu viele Dateien im Buch." }
                     val outFile = File(targetDir, entry.name)
                     // Zip-Slip-Schutz
                     if (!outFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
@@ -32,7 +36,18 @@ class EpubParser {
                         outFile.mkdirs()
                     } else {
                         outFile.parentFile?.mkdirs()
-                        outFile.outputStream().use { zip.copyTo(it, 1 shl 16) }
+                        outFile.outputStream().use { output ->
+                            val buffer = ByteArray(65536)
+                            var fileBytes = 0L
+                            while (true) {
+                                checkCanceled()
+                                val count = zip.read(buffer)
+                                if (count < 0) break
+                                total += count; fileBytes += count
+                                require(total <= maxBytes && fileBytes <= 256L * 1024 * 1024) { "Buch überschreitet das Offline-Speicherlimit." }
+                                output.write(buffer, 0, count)
+                            }
+                        }
                     }
                     zip.closeEntry()
                     entry = zip.nextEntry
@@ -43,7 +58,9 @@ class EpubParser {
 
     /** Parst eine bereits entpackte EPUB unter [bookDir]. */
     fun parse(bookDir: File): EpubBook {
+        if (bookDir.walkTopDown().none { it.extension.equals("opf", true) }) return ComicArchiveParser.parse(bookDir)
         val opfFile = locateOpf(bookDir)
+        require(opfFile.length() <= 4 * 1024 * 1024) { "EPUB-Metadaten zu groß." }
         val opfDir = opfFile.parentFile ?: bookDir
 
         val manifest = HashMap<String, ManifestItem>()      // id -> item
@@ -97,11 +114,11 @@ class EpubParser {
         }
 
         val spinePaths = spineIds.mapNotNull { id ->
-            manifest[id]?.href?.let { resolve(opfDir, it) }
+            manifest[id]?.href?.let { resolve(bookDir, opfDir, it) }
         }.filter { File(it).exists() }
 
         val coverPath = coverId?.let { manifest[it]?.href }
-            ?.let { resolve(opfDir, it) }
+            ?.let { resolve(bookDir, opfDir, it) }
             ?.takeIf { File(it).exists() }
 
         return EpubBook(
@@ -109,15 +126,23 @@ class EpubParser {
             author = author,
             spine = spinePaths,
             coverPath = coverPath,
+            tocJson = EpubToc.read(bookDir, opfDir, manifest.values.firstOrNull { it.properties.split(' ').contains("nav") }?.href, manifest.values.firstOrNull { it.mediaType == "application/x-dtbncx+xml" }?.href),
         )
+    }
+
+    fun readLayouts(bookDir: File): Map<String, Boolean> {
+        val opf = locateOpf(bookDir)
+        return opf.inputStream().use { EpubLayout.read(it) }
+            .mapKeys { (href, _) -> resolve(bookDir, opf.parentFile ?: bookDir, href) }
     }
 
     private fun locateOpf(bookDir: File): File {
         val container = File(bookDir, "META-INF/container.xml")
         if (container.exists()) {
+            require(container.length() <= 1024 * 1024) { "EPUB-Container zu groß." }
             val fullPath = container.inputStream().use { readContainerRootfile(it) }
             if (fullPath != null) {
-                val opf = File(bookDir, fullPath)
+                val opf = EpubSafety.resolve(bookDir, bookDir, fullPath)
                 if (opf.exists()) return opf
             }
         }
@@ -141,12 +166,11 @@ class EpubParser {
     }
 
     /** Löst einen href relativ zum OPF-Ordner zu einem absoluten Pfad auf. */
-    private fun resolve(opfDir: File, href: String): String {
+    private fun resolve(root: File, opfDir: File, href: String): String {
         // hrefs im OPF sind häufig URL-kodiert (z. B. "Kapitel%201.xhtml") –
         // ohne Dekodierung existiert die Datei scheinbar nicht und das Kapitel
         // fällt aus dem Spine. Uri.decode dekodiert nur %XX-Sequenzen.
-        val clean = android.net.Uri.decode(href.substringBefore('#').substringBefore('?'))
-        return File(opfDir, clean).canonicalPath
+        return EpubSafety.resolve(root, opfDir, href).path
     }
 
     private data class ManifestItem(

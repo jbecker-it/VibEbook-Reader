@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Upsert
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -19,11 +20,40 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE id = :id")
     suspend fun getById(id: String): BookEntity?
 
+    @Query("UPDATE books SET tocJson = :toc WHERE id = :id AND spineJson = :expectedSpine")
+    suspend fun updateToc(id: String, toc: String, expectedSpine: String)
+
+    @Query("SELECT * FROM books WHERE remoteId = :remoteId AND remoteId != '' LIMIT 1")
+    suspend fun getByRemoteId(remoteId: String): BookEntity?
+
+    @Query("UPDATE books SET lastOpenedAt = :time WHERE id = :id")
+    suspend fun opened(id: String, time: Long)
+
+    @Query("UPDATE books SET keepOffline = :keep WHERE id = :id")
+    suspend fun setKeepOffline(id: String, keep: Boolean)
+
+    @Query("UPDATE books SET downloaded = 0, spineJson = '[]', coverPath = NULL, keepOffline = 0 WHERE id = :id")
+    suspend fun clearDownload(id: String)
+
+    @Query("UPDATE books SET downloadError = :error WHERE id = :id")
+    suspend fun setDownloadError(id: String, error: String)
+
     @Query("SELECT * FROM books")
     suspend fun getAll(): List<BookEntity>
 
     @Upsert
     suspend fun upsert(book: BookEntity)
+
+    /** Metadata downloaded earlier must not overwrite intervening user actions. */
+    @Transaction
+    suspend fun upsertMetadata(book: BookEntity) {
+        val current = getById(book.id)
+        upsert(if (current == null) book else book.copy(
+            favorite = current.favorite,
+            lastOpenedAt = current.lastOpenedAt,
+            addedAt = current.addedAt,
+        ))
+    }
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIfAbsent(book: BookEntity)
@@ -37,6 +67,6 @@ interface BookDao {
     @Query("DELETE FROM books WHERE id = :id")
     suspend fun delete(id: String)
 
-    @Query("DELETE FROM books WHERE id NOT IN (:keepIds)")
-    suspend fun deleteMissing(keepIds: List<String>)
+    @Query("UPDATE books SET missingRemotely = :missing WHERE id = :id")
+    suspend fun setMissing(id: String, missing: Boolean)
 }

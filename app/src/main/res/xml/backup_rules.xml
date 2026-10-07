@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<full-backup-content>
+<full-backup-content xmlns:tools="http://schemas.android.com/tools">
     <include domain="file" path="progress/" />
-    <exclude domain="file" path="books/" />
+    <!-- Deliberately retain explicit book exclusion alongside the progress-only allowlist. -->
+    <exclude domain="file" path="books/" tools:ignore="FullBackupContent" />
 </full-backup-content>
