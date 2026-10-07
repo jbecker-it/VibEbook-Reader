@@ -835,29 +835,54 @@ internal fun buildInjection(
         };
 
         // ---- Layout / Pagination ------------------------------------------
+        F.geometry = function(node, rules) {
+            // EPUB CSS may use more specific selectors or inline !important rules.
+            // Only the reflow viewport/columns belong to the reader; retain content styling.
+            Object.keys(rules).forEach(function(name) { node.style.setProperty(name, rules[name], 'important'); });
+        };
         F.applyStyle = function(C, GAP, H, PH, PV) {
+            F.geometry(document.documentElement, {
+                'margin':'0', 'padding':'0', 'border-width':'0', 'box-sizing':'border-box',
+                'width':window.innerWidth + 'px', 'min-width':'0', 'max-width':'none',
+                'height':'100%', 'min-height':'0', 'max-height':'none',
+                'transform':'none', 'translate':'none', 'scale':'none', 'rotate':'none', 'zoom':'1',
+                'overflow':'hidden', 'scroll-behavior':'auto', 'scroll-snap-type':'none'
+            });
+            F.geometry(document.body, {
+                'display':'block', 'position':'relative', 'inset':'auto',
+                'margin':'0', 'padding':PV + 'px ' + PH + 'px', 'border-width':'0', 'box-sizing':'border-box',
+                'width':window.innerWidth + 'px', 'min-width':'0', 'max-width':'none',
+                'height':H + 'px', 'min-height':'0', 'max-height':'none',
+                'column-width':C + 'px', 'column-count':String(F.twoPage ? 2 : 1),
+                'column-gap':GAP + 'px', 'column-fill':'auto', 'column-rule':'none',
+                'transform':'none', 'translate':'none', 'scale':'none', 'rotate':'none', 'zoom':'1',
+                'overflow':'visible', 'scroll-behavior':'auto', 'scroll-snap-type':'none'
+            });
             var style = document.getElementById('folio-style');
             if (!style) {
-                style = document.createElement('style');
-                style.id = 'folio-style';
+                style = document.createElement('style'); style.id = 'folio-style';
                 document.head.appendChild(style);
             }
             style.textContent =
-                'html,body{margin:0;padding:0;}' +
                 'html{overscroll-behavior:none;}' +
                 '::-webkit-scrollbar{display:none;}' +
                 ':root{color-scheme:' + F.colorScheme + ';}' +
-                'body{box-sizing:border-box;' +
-                    'height:' + H + 'px;width:' + window.innerWidth + 'px;' +
-                    'padding:' + PV + 'px ' + PH + 'px;' +
-                    'column-width:' + C + 'px;column-gap:' + GAP + 'px;column-fill:auto;' +
-                    'touch-action:none;' +
-                    'font-size:1.08rem;line-height:1.6;-webkit-text-size-adjust:100%;' +
-                    'overflow-wrap:break-word;word-wrap:break-word;}' +
+                'body{touch-action:none;-webkit-text-size-adjust:100%;overflow-wrap:break-word;word-wrap:break-word;}' +
                 'img,svg,video{max-width:100%;max-height:' + (H - 2 * PV) + 'px;' +
                     'height:auto;object-fit:contain;break-inside:avoid;}' +
-                'table{max-width:100%;}' +
-                F.colorRules;
+                'table{max-width:100%;}' + F.colorRules;
+        };
+        F.ensurePageExtent = function(W) {
+            // A partial final spread must still scroll a full page. Without this the
+            // browser clamps scrollX, exposing a slice of the preceding column.
+            var extent = document.getElementById('folio-page-extent');
+            if (!extent) {
+                extent = document.createElement('folio-page-extent'); extent.id = 'folio-page-extent';
+                extent.setAttribute('aria-hidden', 'true'); document.documentElement.appendChild(extent);
+            }
+            extent.style.cssText = 'position:absolute!important;left:' + ((F.screens - 1) * F.step + W - 1) + 'px!important;' +
+                'top:0!important;width:1px!important;height:1px!important;margin:0!important;padding:0!important;border:0!important;' +
+                'visibility:hidden!important;pointer-events:none!important;';
         };
 
         // High-contrast, discrete controls: no animated zoom or dragging needed on E-Ink.
@@ -980,7 +1005,7 @@ internal fun buildInjection(
             document.body.style.setProperty('font-family', '${if (preferences.sansSerif) "sans-serif" else "serif"}', 'important');
             document.body.style.setProperty('line-height', '${preferences.lineHeight}', 'important');
             var k = F.twoPage ? 2 : 1;
-            var C = Math.floor((W - 2 * PH - (k - 1) * GAP) / k);
+            var C = (W - 2 * PH - (k - 1) * GAP) / k;
             F.PH = PH;
             F.applyStyle(C, GAP, H, PH, PV);
 
@@ -988,6 +1013,7 @@ internal fun buildInjection(
             var sw = document.body.scrollWidth;
             var cols = Math.max(1, Math.round((sw - 2 * PH + GAP) / (C + GAP)));
             F.screens = Math.max(1, Math.ceil(cols / k));
+            F.ensurePageExtent(W);
 
             F.buildIndex();
 

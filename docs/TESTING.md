@@ -73,3 +73,9 @@ CI is necessary, not evidence that these physical-device checks passed.
 Compose/Robolectric prüft die Buchaktionen ohne dauerhafte Löschbuttons oder Fehlerabsätze, die sechs Einstellungen-Kategorien auf 360 dp Breite sowie die Höhe der Lesemenüleisten und bestätigte Kapitelsprünge. Screenshots der tatsächlichen Compose-Komponenten liegen im CI-Bericht unter `ui/`.
 
 Auf BOOX zusätzlich prüfen: Bibliothek zeigt im Ruhezustand nur Werkzeugleiste und Tabs; Suche lässt sich schließen; Filter zurücksetzen; Buchmenü öffnen, Fehlerdetails lesen und lokale Entfernung abbrechen. Einstellungen-Unterseiten öffnen und mit Zurück zur Übersicht wechseln; Nextcloud erneut anmelden/testen. Im Reader Kapitelwahl öffnen/abbrechen und Lesezeichen-/Verlauf-Tabs prüfen.
+
+## Buchstart und Textseiten-Geometrie
+
+ReaderLifecycleTest prüft Abgleich-/Verlaufsaufrufe vor und während der Buchinitialisierung, Wiederaufnahme des unveränderten Lesestands und das Zurückweisen unvollständiger IDs vor Netzwerkzugriffen. Chromium prüft höher spezifisches und inline-important Buch-CSS bei 360/401/709 Pixeln, unterschiedliche Ränder, Blättern bis zur letzten Seite und eine leere rechte Seite des letzten Spreads. Textinhalt, kursiver Satz, Auswahl und Wortanker müssen erhalten bleiben.
+
+Die Bildschirmaufnahme des Nutzers zeigt die Symptome; ohne die betroffene EPUB-Datei ist deren genaue CSS-Konstellation nicht bekannt. Auf dem Gerät denselben Titel öffnen, mehrfach vor/zurück blättern und die letzte Seite sowie Schrift-/Randwechsel prüfen.

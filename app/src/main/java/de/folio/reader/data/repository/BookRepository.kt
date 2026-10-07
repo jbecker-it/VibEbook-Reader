@@ -344,32 +344,32 @@ class BookRepository @Inject constructor(
         // Reject incomplete navigation IDs before issuing a request for ".json" on the server.
         require(bookId.matches(Regex("[a-f0-9]{32}"))) { "Ungültige Buch-ID." }
         return progressLocks.getOrPut(bookId) { Mutex() }.withLock {
-        val entity = bookDao.getById(bookId)
-        if (entity?.localOnly == true) { progressRepo.read(bookId)?.let { progressRepo.acknowledge(it) }; return@withLock true }
-        val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
-        if (connectivity.activeNetwork == null || (settingsRepo.wifiOnly.first() && connectivity.isActiveNetworkMetered)) return@withLock false
-        val settings = settingsRepo.currentNextcloudSettings()
-        if (!settings.isConfigured) return@withLock false
-        val remotePath = progressFilePath(settings, bookId)
+            val entity = bookDao.getById(bookId)
+            if (entity?.localOnly == true) { progressRepo.read(bookId)?.let { progressRepo.acknowledge(it) }; return@withLock true }
+            val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
+            if (connectivity.activeNetwork == null || (settingsRepo.wifiOnly.first() && connectivity.isActiveNetworkMetered)) return@withLock false
+            val settings = settingsRepo.currentNextcloudSettings()
+            if (!settings.isConfigured) return@withLock false
+            val remotePath = progressFilePath(settings, bookId)
 
-        val merged = nextcloudClient.syncProgress(settings, remotePath, bookId) {
-            progressRepo.read(bookId)
-        } ?: return@withLock true
-        if (merged != progressRepo.read(bookId)) {
-            progressRepo.write(merged, notify = false)
-        }
-
-        if (settingsRepo.nativeFavorites.first() && entity != null && !entity.missingRemotely)
-            nextcloudClient.setFavorite(settings, joinPath(settings.rootPath, entity.relativePath), merged.favorite)
-        progressRepo.acknowledge(merged)
-
-        // Favorit aus dem Merge-Ergebnis in die lokale DB übernehmen.
-        bookDao.getById(bookId)?.let { entity ->
-            val currentFavorite = progressRepo.read(bookId)?.favorite ?: merged.favorite
-            if (entity.favorite != currentFavorite) {
-                bookDao.setFavorite(bookId, currentFavorite)
+            val merged = nextcloudClient.syncProgress(settings, remotePath, bookId) {
+                progressRepo.read(bookId)
+            } ?: return@withLock true
+            if (merged != progressRepo.read(bookId)) {
+                progressRepo.write(merged, notify = false)
             }
-        }
+
+            if (settingsRepo.nativeFavorites.first() && entity != null && !entity.missingRemotely)
+                nextcloudClient.setFavorite(settings, joinPath(settings.rootPath, entity.relativePath), merged.favorite)
+            progressRepo.acknowledge(merged)
+
+            // Favorit aus dem Merge-Ergebnis in die lokale DB übernehmen.
+            bookDao.getById(bookId)?.let { entity ->
+                val currentFavorite = progressRepo.read(bookId)?.favorite ?: merged.favorite
+                if (entity.favorite != currentFavorite) {
+                    bookDao.setFavorite(bookId, currentFavorite)
+                }
+            }
             true
         }
     }

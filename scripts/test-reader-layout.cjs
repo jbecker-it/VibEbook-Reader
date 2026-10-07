@@ -193,7 +193,14 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
         for (const [width,height,margin,twoPage] of [[360,800,24,false],[401,800,8,true],[709,1536,48,false]]) {
             await page.goto('about:blank'); await page.setViewportSize({width,height});
             await page.setContent(publisherNovel);
+            if (width === 709) await page.evaluate(() => {
+                document.body.style.setProperty('width','850px','important');
+                document.body.style.setProperty('padding','60px','important');
+                document.body.style.setProperty('transform','scale(.9)','important');
+            });
+            const textBefore = await page.evaluate(() => document.body.textContent);
             await page.evaluate(injection(false,{margin,twoPage,fontSize:24}));
+            if (width === 709) await page.evaluate(() => { __folio.colorRules='html,body{background:#000!important;color:#fff!important;}p{color:#fff!important}'; });
             await page.evaluate(() => __folio.layout());
             for (const turn of [1,2,'last']) {
                 const g = await page.evaluate(turn => {
@@ -204,11 +211,29 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
                         left:first.left,right:first.right,gap:parseFloat(css.columnGap),margin:parseFloat(css.marginLeft)};
                 },turn);
                 await page.screenshot({path:`app/build/reports/reader-publisher-${width}-${turn}.png`});
+                assert.equal(await page.evaluate(() => document.body.textContent),textBefore);
+                assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('p')).fontStyle),'italic');
                 assert.ok(Math.abs(g.width-width)<1,`Publisher width overrides reader geometry: ${JSON.stringify(g)}`);
                 assert.ok(Math.abs(g.scroll-g.screen*g.step)<1,`Page must align after a turn: ${JSON.stringify(g)}`);
                 assert.ok(g.left>=margin-2 && g.left<=margin+80 && g.right<=width-margin+2,`First word clipped or neighbouring column visible: ${JSON.stringify(g)}`);
             }
         }
+
+        // Three columns make two spreads with a deliberately empty final right page.
+        await page.goto('about:blank'); await page.setViewportSize({width:401,height:800});
+        await page.setContent('<html><body><p>Erste Seite</p><p style="break-before:column">Zweite Seite</p><p style="break-before:column">Dritte Seite</p></body></html>');
+        await page.evaluate(injection(false,{twoPage:true,margin:8,fontSize:24}));
+        await page.evaluate(() => __folio.layout());
+        const lastSpread = await page.evaluate(() => {
+            const f=__folio; f.setScreen(f.screens-1,false,true);
+            return {screens:f.screens,scroll:scrollX,expected:f.screen*f.step,
+                left:document.querySelectorAll('p')[2].getBoundingClientRect().left,
+                indexedText:f.nodes.map(e=>e.node.textContent).join('')};
+        });
+        assert.equal(lastSpread.screens,2);
+        assert.ok(Math.abs(lastSpread.scroll-lastSpread.expected)<1,JSON.stringify(lastSpread));
+        assert.ok(Math.abs(lastSpread.left-8)<1,JSON.stringify(lastSpread));
+        assert.equal(lastSpread.indexedText,'Erste SeiteZweite SeiteDritte Seite');
 
         // Cross-device resume: highlight the word containing the stored UTF-16 anchor,
         // including inline markup, without changing the chapter text or native selection.
@@ -275,6 +300,6 @@ const comic = `<!doctype html><html><head><meta name="viewport" content="width=1
             assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null);
         }
         assert.deepEqual(errors,[]);
-        console.log('Passed: layered comic scaling, phone/Go 6/landscape, reinjection, navigation, novel pagination, cross-device resume markers.');
+        console.log('Passed: layered comic scaling, phone/Go 6/landscape, reinjection, navigation, publisher CSS isolation, full last spreads, novel pagination, cross-device resume markers.');
     } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode=1; });

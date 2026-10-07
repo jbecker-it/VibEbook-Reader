@@ -1,5 +1,7 @@
 Folio für Android und E-Ink-Reader.
 
+- Buchstart korrigiert: Frühe Lifecycle-Abgleiche warten auf das geladene Buch, statt eine leere Buch-ID abzugleichen.
+- Textseiten behalten beim Blättern die Reader-Breite und Abstände auch bei überschreibendem Buch-CSS. Letzte halbe Doppelseiten bleiben exakt ausgerichtet.
 - Kompakte Bibliothek: Suche und Filter bei Bedarf, Buchaktionen im ⋮-Menü, Downloadprobleme als kleines Symbol mit aufrufbaren Details.
 - Einstellungen mit sechs getrennten Bereichen und deutlich abgesetzten Gruppen. Lesemenü mit schmalen Leisten und getrennten Tabs für Inhalt, Lesezeichen und Verlauf.
 - Dauerhaft vorgemerkte Lesestände mit automatischem Wiederholen, konfliktfestem Nextcloud-Abgleich und lokalem Sofortöffnen.
