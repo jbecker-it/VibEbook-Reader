@@ -85,6 +85,8 @@ class SettingsRepository @Inject constructor(
     val wifiOnly: Flow<Boolean> = context.dataStore.data.map { it[Keys.WIFI_ONLY] ?: true }
     val libraryBound = context.dataStore.data.map { it[Keys.LIBRARY_BOUND] ?: false }
     val autoDownload = context.dataStore.data.map { it[booleanPreferencesKey("auto_download")] ?: true }
+    suspend fun lastLibrarySyncAt(): Long = (context.dataStore.data.first()[intPreferencesKey("last_library_sync_at")] ?: 0).toLong()
+    suspend fun setLastLibrarySyncAt(time: Long) { context.dataStore.edit { it[intPreferencesKey("last_library_sync_at")] = time.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt() } }
     val storageBudgetMb = context.dataStore.data.map { (it[intPreferencesKey("storage_budget_mb")] ?: 2048).coerceIn(128, 16384) }
     val nativeFavorites = context.dataStore.data.map { it[booleanPreferencesKey("native_favorites")] ?: false }
     suspend fun setAutoDownload(value: Boolean) { context.dataStore.edit { it[booleanPreferencesKey("auto_download")] = value } }
