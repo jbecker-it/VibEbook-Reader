@@ -14,8 +14,11 @@ android {
         applicationId = "de.folio.reader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Keep this workflow's run counter for every distributed APK; reruns retain the same version.
+        versionCode = providers.environmentVariable("FOLIO_VERSION_CODE").orNull?.toInt()?.also {
+            require(it in 1..2100000000) { "Invalid FOLIO_VERSION_CODE" }
+        } ?: 1
+        versionName = "1.0.$versionCode"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -36,17 +39,18 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
+    testOptions { unitTests.isIncludeAndroidResources = true }
 
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
-            // smbj / bouncycastle bring duplicate notices
-            excludes += "META-INF/DEPENDENCIES"
         }
     }
 }
+
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
 dependencies {
     implementation(libs.androidx.core.ktx)
@@ -66,6 +70,8 @@ dependencies {
     implementation(libs.androidx.material3.window.size)
     implementation(libs.androidx.navigation.compose)
     debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
 
     // Persistence
     implementation(libs.androidx.room.runtime)
@@ -83,10 +89,15 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
 
-    // SMB / NAS
-    implementation(libs.smbj)
-    implementation(libs.bouncycastle)
-    implementation(libs.slf4j.simple)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jsoup:jsoup:1.18.3")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("androidx.room:room-testing:2.6.1")
 
     // Image loading (covers)
     implementation(libs.coil.compose)

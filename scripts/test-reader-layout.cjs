@@ -1,0 +1,305 @@
+// Execute the production injected script against an original layered comic in Chromium.
+const { chromium } = require('playwright');
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync('app/src/main/java/de/folio/reader/ui/reader/ReaderScreen.kt', 'utf8');
+const template = source.split('    return """')[1].split('    """.trimIndent()')[0];
+function injection(fixed = null, options = {}) {
+    const values = {
+        'preferences.leftHanded': 'false',
+        'if (preferences.wideTapZones) "0.4" else "0.3"': '0.4',
+        'jsString(restoreFragment)': JSON.stringify(options.fragment || ''),
+        'jsString(colorRules)': JSON.stringify('html,body{color:#000!important;background:#fff!important;}p,div,span,li,td,th,h1,h2,h3,h4,h5,h6,blockquote,figcaption{color:#000!important;background-color:transparent!important;}'),
+        'fixedLayout?.toString() ?: "null"': String(fixed),
+        'preferences.margin': String(options.margin ?? 24), 'preferences.fontSize': String(options.fontSize || 32),
+        'if (preferences.sansSerif) "sans-serif" else "serif"': 'serif',
+        'preferences.lineHeight': '2.2',
+    };
+    return template.replace(/\$\{([^}]+)\}/g, (_, key) => {
+        assert.ok(key in values, `Unknown Kotlin template value: ${key}`);
+        return values[key];
+    }).replace(/\$(twoPage|smoothTurns|colorScheme|restoreCharOffset|showResumeMarker|textHex|frac)\b/g,
+        (_, key) => ({twoPage:String(options.twoPage ?? true),smoothTurns:'false',colorScheme:'dark',restoreCharOffset:String(options.anchor ?? -1),showResumeMarker:String(options.marker ?? false),textHex:'#000000',frac:String(options.fraction ?? 0)})[key]);
+}
+const comic = `<!doctype html><html><head><meta name="viewport" content="width=1200,height=1800">
+<style>body{margin:0;width:1200px;height:1800px;background:white;font:40px sans-serif}
+#art{position:absolute;left:0;top:0;width:1200px;height:1800px}
+#caption{position:absolute;left:240px;top:360px;width:400px;color:#123456}</style></head>
+<body><svg id="art" viewBox="0 0 1200 1800"><rect width="1200" height="1800" fill="#eee"/>
+<rect x="220" y="340" width="440" height="160" fill="white" stroke="black"/></svg>
+<div id="caption">An original test comic</div></body></html>`;
+(async () => {
+    const browser = await chromium.launch({headless:true});
+    try {
+        const page = await browser.newPage();
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        async function load(html, fixed) {
+            await page.goto('about:blank');
+            await page.setContent(html);
+            await page.evaluate(injection(fixed));
+            await page.evaluate(() => __folio.layout());
+        }
+        for (const fixed of [null,true]) {
+            await load(comic,fixed);
+            for (const [width,height] of [[360,800],[1072,1448],[800,360]]) {
+                await page.setViewportSize({width,height});
+                await page.evaluate(() => __folio.layout());
+                const g = await page.evaluate(() => {
+                    const a = document.querySelector('#art').getBoundingClientRect();
+                    const c = document.querySelector('#caption').getBoundingClientRect();
+                    return {x:a.x,y:a.y,w:a.width,h:a.height,cx:c.x,cy:c.y,
+                        font:getComputedStyle(document.body).fontSize,
+                        color:getComputedStyle(document.querySelector('#caption')).color,screens:__folio.screens};
+                });
+                const scale = Math.min(width/1200,height/1800);
+                assert.ok(Math.abs(g.w-1200*scale)<1);
+                assert.ok(Math.abs(g.h-1800*scale)<1);
+                assert.ok(Math.abs(g.cx-g.x-240*scale)<1);
+                assert.ok(Math.abs(g.cy-g.y-360*scale)<1);
+                assert.equal(g.font,'40px');
+                assert.equal(g.color,'rgb(18, 52, 86)');
+                assert.equal(g.screens,1);
+                assert.ok(g.x>=-1 && g.y>=-1);
+            }
+            await page.evaluate(injection(fixed));
+            assert.equal(await page.evaluate(() => getComputedStyle(document.body).fontSize),'40px');
+            await page.evaluate(() => {
+                window.events=[];
+                window.AndroidReader={onPosition:(f,a)=>events.push(['position',f,a]),
+                    onNextChapter:()=>events.push(['next']),onPrevChapter:()=>events.push(['prev'])};
+                __folio.next(); __folio.prev();
+            });
+            assert.deepEqual(await page.evaluate(() => events),[['position',1,-1],['next'],['prev']]);
+        }
+        await load(comic.replace('width=1200,height=1800','width=device-width'),true);
+        assert.equal(await page.evaluate(() => __folio.fixed),true);
+        assert.equal(await page.evaluate(() => __folio.pageHeight),1800);
+        // Legacy converted comics: no OPF hint or numeric viewport; a CSS-sized canvas with text overlays.
+        const legacy = comic.replace('width=1200,height=1800','width=device-width')
+            .replace('body{margin:0;width:1200px;height:1800px;background:white;font:40px sans-serif}',
+                'body{margin:0} #page{position:relative;width:1200px;height:1800px;background:white;font:40px sans-serif}')
+            .replace('<body>','<body><div id="page">').replace('</body>','</div></body>');
+        for (const mode of [null,true]) {
+            await page.setViewportSize({width:360,height:800});
+            await load(legacy,mode);
+            assert.equal(await page.evaluate(() => __folio.fixed),true);
+            assert.equal(await page.evaluate(() => __folio.pageWidth),1200);
+            assert.equal(await page.evaluate(() => __folio.pageHeight),1800);
+            const g = await page.evaluate(() => {
+                const a=document.querySelector('#art').getBoundingClientRect();
+                const c=document.querySelector('#caption').getBoundingClientRect();
+                return {w:a.width,h:a.height,dx:c.x-a.x,dy:c.y-a.y};
+            });
+            assert.ok(Math.abs(g.w-360)<1 && Math.abs(g.h-540)<1);
+            assert.ok(Math.abs(g.dx-72)<1 && Math.abs(g.dy-108)<1);
+        }
+        // Synthetic reproduction of the supplied EPUB: 5x artwork and positioned text,
+        // reduced by an author body transform. Do not clip the canvas before scaling.
+        const scaledComic = `<!doctype html><html><head>
+            <meta name="viewport" content="width=709,height=1066">
+            <style>body{margin:0;width:709px;height:1066px;transform:rotate(0deg) scale(.2);transform-origin:0% 0%}
+            #art{width:500%;height:500%} #caption{position:absolute;left:2000px;top:4500px;font:75px sans-serif}</style>
+            </head><body><svg id="art" viewBox="0 0 3545 5330"><rect width="3545" height="5330" fill="silver"/></svg>
+            <div id="caption">Original test caption</div></body></html>`;
+        for (const mode of [null,true]) {
+            await load(scaledComic,mode);
+            for (const [width,height] of [[360,800],[1072,1448],[800,360]]) {
+                await page.setViewportSize({width,height});
+                await page.evaluate(injection(mode));
+                await page.evaluate(() => __folio.layout());
+                const g = await page.evaluate(() => {
+                    const a=document.querySelector('#art').getBoundingClientRect();
+                    const c=document.querySelector('#caption').getBoundingClientRect();
+                    return {x:a.x,y:a.y,w:a.width,h:a.height,dx:c.x-a.x,dy:c.y-a.y,
+                        overflow:getComputedStyle(document.body).overflow};
+                });
+                const scale=Math.min(width/709,height/1066);
+                assert.ok(Math.abs(g.w-709*scale)<1 && Math.abs(g.h-1066*scale)<1,JSON.stringify(g));
+                assert.ok(Math.abs(g.dx-400*scale)<1 && Math.abs(g.dy-900*scale)<1);
+                assert.ok(g.x>=-1 && g.y>=-1 && g.x+g.w<=width+1 && g.y+g.h<=height+1);
+                assert.equal(g.overflow,'visible');
+            }
+        }
+        // Zoom changes the whole publisher canvas, does not turn pages or mark progress as edited.
+        await page.setViewportSize({width:360,height:800});
+        await load(scaledComic,true);
+        await page.evaluate(() => {
+            window.events=[];
+            window.AndroidReader={onPosition:(f,a,user)=>events.push(user),onNextChapter:()=>events.push('next')};
+        });
+        await page.getByRole('button',{name:'Zoomregler öffnen',exact:true}).click();
+        await page.getByRole('button',{name:'Vergrößern',exact:true}).click();
+        assert.equal(await page.evaluate(() => __folio.zoom),1.5);
+        assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')),'Vergrößern');
+        await page.getByRole('button',{name:'Zoomregler versetzen',exact:true}).click();
+        assert.equal(await page.evaluate(() => document.getElementById('folio-zoom').style.right),'8px');
+        await page.getByRole('button',{name:'Vergrößern',exact:true}).click();
+        await page.getByRole('button',{name:'Ausschnitt nach rechts',exact:true}).click();
+        await page.getByRole('button',{name:'Ausschnitt nach unten',exact:true}).click();
+        assert.ok(await page.evaluate(() => __folio.panX>0 && __folio.panY>0));
+        assert.ok(await page.evaluate(() => events.every(e=>e===false)));
+        await page.getByRole('button',{name:'Ganze Seite anzeigen',exact:true}).click();
+        assert.equal(await page.evaluate(() => __folio.zoom),1);
+        assert.equal(await page.evaluate(() => __folio.panX+__folio.panY),0);
+
+        // Manual panel steps stay on the current page until every overlapping crop is covered.
+        await page.getByRole('button',{name:'Vergrößern',exact:true}).click();
+        await page.evaluate(() => { __folio.panX=0; __folio.panY=0; __folio.layout(); });
+        await page.getByRole('button',{name:'Nächster Ausschnitt',exact:true}).click();
+        assert.ok(await page.evaluate(() => __folio.panX>0 || __folio.panY>0));
+        assert.ok(await page.evaluate(() => events.every(e=>e===false)));
+
+        // An ordinary inline image with prose must not trigger fixed-page detection.
+        await load('<html><body><svg width="300" height="400"></svg><p>Ordinary prose</p></body></html>',null);
+        assert.equal(await page.evaluate(() => __folio.fixed),false);
+        await load('<html><head><meta name="viewport" content="width=1200,height=1800"></head><body>' +
+            '<p>This is an original paragraph for pagination regression testing.</p>'.repeat(150) + '</body></html>',false);
+        assert.equal(await page.evaluate(() => __folio.fixed),false);
+        assert.ok(await page.evaluate(() => __folio.screens>1));
+        assert.ok(await page.evaluate(() => __folio.anchor>=0),'The first page of a new text chapter needs an anchor');
+        await page.evaluate(() => __folio.next());
+        assert.equal(await page.evaluate(() => __folio.screen),1);
+        const anchor = await page.evaluate(() => __folio.anchor);
+        assert.ok(anchor>0);
+        for (const [width,height,fontSize,twoPage] of [[1072,1448,22,true],[360,800,40,false],[800,360,28,true]]) {
+            await page.setViewportSize({width,height});
+            await page.evaluate(injection(false,{fontSize,twoPage}));
+            await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => __folio.anchor),anchor);
+            assert.equal(await page.evaluate(() => __folio.pageOfOffset(__folio.anchor)),await page.evaluate(() => __folio.screen));
+        }
+        const novel = await page.evaluate(() => document.body.innerHTML);
+        await page.goto('about:blank');
+        await page.setViewportSize({width:400,height:900});
+        await page.setContent('<html><body>'+novel+'</body></html>');
+        await page.evaluate(() => { window.events=[]; window.AndroidReader={onPosition:(f,a,user)=>events.push(user)}; });
+        await page.evaluate(injection(false,{anchor,fontSize:24,twoPage:false}));
+        await page.evaluate(() => __folio.layout());
+        assert.equal(await page.evaluate(() => __folio.anchor),anchor);
+        assert.equal(await page.evaluate(() => __folio.pageOfOffset(__folio.anchor)),await page.evaluate(() => __folio.screen));
+        assert.ok(await page.evaluate(() => events.every(e=>e===false)));
+        await page.evaluate(() => __folio.next());
+        assert.equal(await page.evaluate(() => events.at(-1)),true);
+
+        // Publisher rules must not change our column geometry after a turn. This also
+        // catches a last-page scroll clamp and fractional two-page column rounding.
+        const publisherNovel = `<html><head><style>
+            html body { margin: 1.5em auto; padding: 2em 4em; max-width: 28em;
+                width: 760px; height: auto; column-gap: 7em; box-sizing: content-box; }
+            p { font-style: italic; text-indent: 1em; }
+            </style></head><body>` + '<p>Lesetext mit verschiedenen Wörtern. Jeder Absatz muss vollständig auf die sichtbare Seite passen, auch nach dem Blättern.</p>'.repeat(100) + '</body></html>';
+        fs.mkdirSync('app/build/reports', {recursive:true});
+        for (const [width,height,margin,twoPage] of [[360,800,24,false],[401,800,8,true],[709,1536,48,false]]) {
+            await page.goto('about:blank'); await page.setViewportSize({width,height});
+            await page.setContent(publisherNovel);
+            if (width === 709) await page.evaluate(() => {
+                document.body.style.setProperty('width','850px','important');
+                document.body.style.setProperty('padding','60px','important');
+                document.body.style.setProperty('transform','scale(.9)','important');
+            });
+            const textBefore = await page.evaluate(() => document.body.textContent);
+            await page.evaluate(injection(false,{margin,twoPage,fontSize:24}));
+            if (width === 709) await page.evaluate(() => { __folio.colorRules='html,body{background:#000!important;color:#fff!important;}p{color:#fff!important}'; });
+            await page.evaluate(() => __folio.layout());
+            for (const turn of [1,2,'last']) {
+                const g = await page.evaluate(turn => {
+                    const f=__folio; f.setScreen(turn === 'last' ? f.screens-1 : turn,false,true);
+                    const css=getComputedStyle(document.body), rect=document.body.getBoundingClientRect();
+                    const first=f.rangeAtOffset(f.anchor).getBoundingClientRect();
+                    return {width:rect.width,step:f.step,screen:f.screen,screens:f.screens,scroll:scrollX,
+                        left:first.left,right:first.right,gap:parseFloat(css.columnGap),margin:parseFloat(css.marginLeft)};
+                },turn);
+                await page.screenshot({path:`app/build/reports/reader-publisher-${width}-${turn}.png`});
+                assert.equal(await page.evaluate(() => document.body.textContent),textBefore);
+                assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('p')).fontStyle),'italic');
+                assert.ok(Math.abs(g.width-width)<1,`Publisher width overrides reader geometry: ${JSON.stringify(g)}`);
+                assert.ok(Math.abs(g.scroll-g.screen*g.step)<1,`Page must align after a turn: ${JSON.stringify(g)}`);
+                assert.ok(g.left>=margin-2 && g.left<=margin+80 && g.right<=width-margin+2,`First word clipped or neighbouring column visible: ${JSON.stringify(g)}`);
+            }
+        }
+
+        // Three columns make two spreads with a deliberately empty final right page.
+        await page.goto('about:blank'); await page.setViewportSize({width:401,height:800});
+        await page.setContent('<html><body><p>Erste Seite</p><p style="break-before:column">Zweite Seite</p><p style="break-before:column">Dritte Seite</p></body></html>');
+        await page.evaluate(injection(false,{twoPage:true,margin:8,fontSize:24}));
+        await page.evaluate(() => __folio.layout());
+        const lastSpread = await page.evaluate(() => {
+            const f=__folio; f.setScreen(f.screens-1,false,true);
+            return {screens:f.screens,scroll:scrollX,expected:f.screen*f.step,
+                left:document.querySelectorAll('p')[2].getBoundingClientRect().left,
+                indexedText:f.nodes.map(e=>e.node.textContent).join('')};
+        });
+        assert.equal(lastSpread.screens,2);
+        assert.ok(Math.abs(lastSpread.scroll-lastSpread.expected)<1,JSON.stringify(lastSpread));
+        assert.ok(Math.abs(lastSpread.left-8)<1,JSON.stringify(lastSpread));
+        assert.equal(lastSpread.indexedText,'Erste SeiteZweite SeiteDritte Seite');
+
+        // Cross-device resume: highlight the word containing the stored UTF-16 anchor,
+        // including inline markup, without changing the chapter text or native selection.
+        const markerBook = '<html><body><p>Ein Vorspann mit normalem Text.</p>'.repeat(1) +
+            '<p>Ein weiterer Absatz zur Bildschirmprüfung.</p>'.repeat(35) +
+            '<p id="resume">„Geräte<strong>übergreifend</strong>“ weiterlesen. Café und Wörter bleiben lesbar.</p>' +
+            '<p>Text nach der letzten Lesestelle.</p>'.repeat(100) + '</body></html>';
+        await page.setViewportSize({width:360,height:800});
+        await load(markerBook,false);
+        const wordAnchor = await page.evaluate(() => __folio.nodes.find(e=>e.node===document.getElementById('resume').firstChild).start + 3);
+        for (const segmenter of [true,false]) {
+            await page.goto('about:blank');
+            await page.setViewportSize({width:800,height:600});
+            await page.setContent(markerBook);
+            await page.evaluate(enabled => {
+                if (!enabled) Intl.Segmenter = undefined;
+                window.events=[]; window.dismissals=0;
+                window.AndroidReader={onPosition:(f,a,user)=>events.push(user),onResumeMarkerDismissed:()=>dismissals++};
+            },segmenter);
+            const textBefore = await page.evaluate(() => document.body.textContent);
+            await page.evaluate(injection(false,{anchor:wordAnchor,fontSize:24,twoPage:true,marker:true}));
+            await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => __folio.resumeWordRange().toString()),'Geräteübergreifend');
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker').getAttribute('aria-label')),'Letzte Lesestelle: Geräteübergreifend');
+            assert.equal(await page.evaluate(() => document.body.textContent),textBefore);
+            assert.equal(await page.evaluate(() => getSelection().isCollapsed),true);
+            assert.ok(await page.evaluate(() => events.every(e=>e===false)));
+            const sameOverlay = await page.evaluate(() => {
+                const overlay=document.getElementById('folio-resume-marker'); __folio.layout();
+                return overlay===document.getElementById('folio-resume-marker');
+            });
+            assert.equal(sameOverlay,true,'Unchanged layout must not redraw the marker');
+            await page.setViewportSize({width:400,height:900});
+            await page.evaluate(injection(false,{anchor:wordAnchor,fontSize:28,twoPage:false,marker:true}));
+            await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => __folio.resumeWordRange().toString()),'Geräteübergreifend');
+            assert.equal(await page.evaluate(() => __folio.anchor),wordAnchor);
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker').children.length),1,'Inline formatting must share one frame on the same line');
+            assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('folio-resume-marker').firstElementChild).backgroundColor),'rgba(128, 128, 128, 0.18)','Reader colors must preserve the marker background');
+            assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('folio-resume-marker')).pointerEvents),'none');
+            fs.mkdirSync('app/build/reports', {recursive:true});
+            if (segmenter) await page.screenshot({path:'app/build/reports/reader-resume.png'});
+            await page.evaluate(() => __folio.next());
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null);
+            assert.equal(await page.evaluate(() => dismissals),1);
+            await page.evaluate(injection(false,{anchor:wordAnchor,marker:true}));
+            await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null,'Reinjection must not revive a dismissed marker');
+        }
+        // No false word for legacy anchors or image-only pages; badge stays outside the text index.
+        for (const [html,fixed] of [[comic,true],['<html><body><p>Alter Lesestand ohne Zeichenanker.</p></body></html>',false]]) {
+            await load(html,fixed);
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null,'Fresh book has no resume marker');
+            await page.goto('about:blank'); await page.setContent(html);
+            await page.evaluate(injection(fixed,{marker:true})); await page.evaluate(() => __folio.layout());
+            assert.equal(await page.evaluate(() => document.querySelector('#folio-resume-marker').textContent),'Hier weiterlesen');
+            assert.equal(await page.evaluate(() => document.querySelector('#folio-resume-marker').parentElement===document.documentElement),true);
+            await page.evaluate(() => {
+                const style=document.createElement('style');style.textContent='div,span{color:white!important;background:transparent!important;width:100%!important}';document.head.appendChild(style);
+            });
+            assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#folio-resume-marker').firstElementChild).color),'rgb(0, 0, 0)');
+            assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#folio-resume-marker').firstElementChild).backgroundColor),'rgb(255, 255, 255)');
+            await page.evaluate(() => __folio.prev());
+            assert.equal(await page.evaluate(() => document.getElementById('folio-resume-marker')),null);
+        }
+        assert.deepEqual(errors,[]);
+        console.log('Passed: layered comic scaling, phone/Go 6/landscape, reinjection, navigation, publisher CSS isolation, full last spreads, novel pagination, cross-device resume markers.');
+    } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode=1; });

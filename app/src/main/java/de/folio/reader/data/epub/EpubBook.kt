@@ -8,4 +8,5 @@ data class EpubBook(
     val spine: List<String>,
     /** Absoluter Pfad zum Cover-Bild, falls vorhanden. */
     val coverPath: String?,
+    val tocJson: String = "[]",
 )
