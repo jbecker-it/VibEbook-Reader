@@ -29,7 +29,8 @@ class SyncWorker @AssistedInject constructor(
                 )
             )
         }
-        failureStore.set(null)
+        // Vollabgleich (inkl. Lesestände) erfolgreich: auch veraltete Fehler anderer Kanäle löschen.
+        failureStore.clearAll()
         Result.success()
     } catch (e: kotlinx.coroutines.CancellationException) { throw e
     } catch (e: Exception) {

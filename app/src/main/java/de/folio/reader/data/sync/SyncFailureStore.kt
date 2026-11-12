@@ -21,4 +21,10 @@ class SyncFailureStore @Inject constructor(@ApplicationContext context: Context)
         prefs.edit().putString(channel, message).apply()
         current.value = combined()
     }
+
+    /** Erfolgreicher Vollabgleich: alle Kanäle (Bibliothek + Lesestände) freigeben. */
+    @Synchronized fun clearAll() {
+        prefs.edit().remove("message").remove("progress").apply()
+        current.value = combined()
+    }
 }

@@ -27,6 +27,7 @@ class ProgressSyncWorker @AssistedInject constructor(
         failures.set(message, "progress")
         val status = (e as? de.folio.reader.data.nextcloud.DavException)?.status
         if (status == 401 || status == 403 || status == 404 || e is IllegalArgumentException || e is org.json.JSONException) Result.failure(workDataOf("message" to message))
-        else Result.retry()
+        else if (runAttemptCount < 5) Result.retry()
+        else Result.failure(workDataOf("message" to message))
     }
 }

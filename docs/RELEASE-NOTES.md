@@ -1,5 +1,6 @@
 Folio für Android und E-Ink-Reader.
 
+- Veraltete Sync-Fehler verschwinden nach einem erfolgreichen Abgleich; das automatische Wiederholen von Netzfehlern bei Leseständen ist begrenzt.
 - Buchstart korrigiert: Frühe Lifecycle-Abgleiche warten auf das geladene Buch, statt eine leere Buch-ID abzugleichen.
 - Textseiten behalten beim Blättern die Reader-Breite und Abstände auch bei überschreibendem Buch-CSS. Letzte halbe Doppelseiten bleiben exakt ausgerichtet.
 - Kompakte Bibliothek: Suche und Filter bei Bedarf, Buchaktionen im ⋮-Menü, Downloadprobleme als kleines Symbol mit aufrufbaren Details.
