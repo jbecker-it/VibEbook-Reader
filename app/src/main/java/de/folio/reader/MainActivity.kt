@@ -60,5 +60,6 @@ class MainActivity : ComponentActivity() {
         // Beim Öffnen der App (bzw. Rückkehr in den Vordergrund) die
         // Lesefortschritte automatisch mit dem Nextcloud abgleichen.
         syncManager.syncProgressNow()
+        syncManager.autoSyncLibraryOnOpen()
     }
 }

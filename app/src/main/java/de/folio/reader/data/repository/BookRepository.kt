@@ -115,6 +115,7 @@ class BookRepository @Inject constructor(
         cleanupRevisions()
         if (errors.isNotEmpty()) throw IOException("${errors.size} Dateien konnten nicht abgeglichen werden. Andere Bücher bleiben nutzbar.\n" + errors.take(3).joinToString("\n"))
         onProgress("Fertig", 1f)
+        settingsRepo.setLastLibrarySyncAt(System.currentTimeMillis())
     }
 
     suspend fun downloadBook(id: String) = libraryMutex.withLock {

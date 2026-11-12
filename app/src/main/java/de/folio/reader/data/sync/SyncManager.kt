@@ -179,6 +179,22 @@ class SyncManager @Inject constructor(
         }
     }
 
+    /**
+     * Aktualisiert die Bibliothek direkt nach dem App-Start – aber nur, wenn der letzte
+     * erfolgreiche Abgleich älter als [AUTO_SYNC_AFTER_MS] ist und nichts anderes läuft.
+     * So werden auf Nextcloud verschobene/entfernte/neue Bücher ohne manuelles Drücken sichtbar.
+     */
+    fun autoSyncLibraryOnOpen() {
+        scope.launch {
+            if (!shouldAutoSyncLibrary(System.currentTimeMillis(), settingsRepo.lastLibrarySyncAt(),
+                settingsRepo.currentNextcloudSettings().isConfigured,
+                workManager.getWorkInfosForUniqueWork(WORK_ONE_TIME).get().any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED })) {
+                return@launch
+            }
+            syncNow()
+        }
+    }
+
     /** Regelmäßiger Abgleich (alle 6 Stunden). */
     suspend fun schedulePeriodic() {
         val wifiOnly = settingsRepo.wifiOnly.first()
@@ -200,5 +216,11 @@ class SyncManager @Inject constructor(
         private const val WORK_PROGRESS = "folio_progress"
         private const val WORK_ONE_TIME = "folio_sync_now"
         private const val WORK_PERIODIC = "folio_sync_periodic"
+        /** Bibliothek beim App-Start nur aktualisieren, wenn der letzte Sync älter als 15 Minuten ist. */
+        const val AUTO_SYNC_AFTER_MS = 15 * 60 * 1000L
     }
 }
+
+/** Reine Abfrage für [SyncManager.autoSyncLibraryOnOpen] – ohne Android-Abhängigkeiten, damit sie unit-testbar bleibt. */
+fun shouldAutoSyncLibrary(now: Long, lastSyncAt: Long, configured: Boolean, activeWork: Boolean): Boolean =
+    configured && !activeWork && (now - lastSyncAt > SyncManager.AUTO_SYNC_AFTER_MS)
