@@ -10,6 +10,9 @@ import dagger.hilt.components.SingletonComponent
 import de.folio.reader.data.epub.EpubParser
 import de.folio.reader.data.local.BookDao
 import de.folio.reader.data.local.FolioDatabase
+import de.folio.reader.data.nextcloud.DnsFallbackStore
+import de.folio.reader.data.nextcloud.SharedPreferencesDnsBackend
+import de.folio.reader.data.nextcloud.TailnetDns
 import de.folio.reader.data.nextcloud.NextcloudClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,7 +51,13 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideNextcloudClient(): NextcloudClient = NextcloudClient()
+    fun provideNextcloudClient(@ApplicationContext context: Context): NextcloudClient {
+        // DNS-Fallback: bleibt die Auflösung des Servernamens aus (z. B. nach
+        // einem Tailscale-Aussetzer), verbindet OkHttp über die hinterlegte
+        // Tailscale-IP. Die TLS-Prüfung läuft weiterhin gegen den Namen.
+        val store = DnsFallbackStore(SharedPreferencesDnsBackend(context))
+        return NextcloudClient(NextcloudClient.defaultClient(TailnetDns(store)))
+    }
 
     @Provides
     @Singleton

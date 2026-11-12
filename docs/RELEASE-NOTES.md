@@ -1,5 +1,7 @@
 Folio für Android und E-Ink-Reader.
 
+- DNS-Fallback: Falls der Nextcloud-Servername (z. B. über Tailscale) zeitweise nicht aufgelöst werden kann, verbindet Folio mit der zuletzt erkannten IP. Optional lässt sich in den Einstellungen unter „Erweitert“ die Tailscale-IP (100.x.y.z) des Servers hinterlegen – die TLS-Zertifikatsprüfung läuft weiterhin gegen den Servernamen.
+- Der Verbindungstest zeigt jetzt die verwendete IP-Adresse an („Server → 100.x.y.z“) und macht so erkennbar, ob DNS-Fallback greift.
 - Veraltete Sync-Fehler verschwinden nach einem erfolgreichen Abgleich; das automatische Wiederholen von Netzfehlern bei Leseständen ist begrenzt.
 - Buchstart korrigiert: Frühe Lifecycle-Abgleiche warten auf das geladene Buch, statt eine leere Buch-ID abzugleichen.
 - Textseiten behalten beim Blättern die Reader-Breite und Abstände auch bei überschreibendem Buch-CSS. Letzte halbe Doppelseiten bleiben exakt ausgerichtet.

@@ -12,6 +12,7 @@ import okio.buffer
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Credentials
+import okhttp3.Dns
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl
@@ -42,9 +43,7 @@ class DavException(val status: Int, operation: String = "WebDAV") : IOException(
     else -> "Nextcloud-Anfrage fehlgeschlagen (HTTP $status)."
 })
 
-class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
-    .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS)
-    .callTimeout(120, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()) {
+class NextcloudClient(private val client: OkHttpClient = defaultClient()) {
 
     private suspend fun execute(settings: NextcloudSettings, path: String, method: String,
         body: String? = null, headers: Map<String, String> = emptyMap(), download: Boolean = false): Response {
@@ -138,7 +137,9 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
         }
     }
 
-    suspend fun testConnection(settings: NextcloudSettings): Result<Unit> = try {
+    suspend fun testConnection(settings: NextcloudSettings): Result<String> = try {
+        val host = settings.davUrl().host
+        val resolved = runCatching { client.dns.lookup(host).firstOrNull()?.hostAddress }.getOrNull()
         list(settings, settings.rootPath)
         val probe = settings.progressDir.trim('/') + "/.folio-probe-" + java.util.UUID.randomUUID() + ".json"
         val payload = "{\"folioProbe\":true}"
@@ -151,7 +152,7 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
                 execute(settings, probe, "DELETE").use { require(it.code in listOf(200, 204, 404)) { "Testdatei konnte nicht entfernt werden." } }
             }
         }
-        Result.success(Unit)
+        Result.success(if (resolved.isNullOrBlank()) "Verbindung erfolgreich." else "Verbindung erfolgreich · $host → $resolved")
     } catch (e: kotlinx.coroutines.CancellationException) { throw e
     } catch (e: Exception) { Result.failure(e) }
 
@@ -295,6 +296,10 @@ class NextcloudClient(private val client: OkHttpClient = OkHttpClient.Builder()
 
     companion object {
         private const val MAX_XML = 4 * 1024 * 1024
+
+        fun defaultClient(dns: Dns = Dns.SYSTEM): OkHttpClient = OkHttpClient.Builder()
+            .dns(dns).connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(120, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
         private fun readLimited(input: java.io.InputStream, limit: Int): String {
             val output = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(8192)

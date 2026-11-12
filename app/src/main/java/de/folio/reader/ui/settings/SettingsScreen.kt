@@ -52,6 +52,7 @@ fun SettingsScreen(
     val wifiOnly by viewModel.wifiOnly.collectAsStateWithLifecycle()
     val eInkMode by viewModel.eInkMode.collectAsStateWithLifecycle()
     val connectionTest by viewModel.connectionTest.collectAsStateWithLifecycle()
+    val fallbackIp by viewModel.fallbackIp.collectAsStateWithLifecycle()
     val reader by viewModel.readerPreferences.collectAsStateWithLifecycle()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -193,6 +194,8 @@ fun SettingsScreen(
                                 OutlinedTextField(value = progressDir, readOnly = bound, onValueChange = { progressDir = it }, label = { Text("Ordner für Lesefortschritt") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                                 if (!bound) OutlinedButton(onClick = { pickerProgress = true; pickerPath = progressDir; viewModel.browseFolders(current(), pickerPath); picker = true }, enabled = current().isConfigured) { Text("Fortschrittsordner wählen") }
                                 Text("Ordner sind relativ zu deinen Nextcloud-Dateien.", style = MaterialTheme.typography.bodySmall)
+                                OutlinedTextField(value = fallbackIp, onValueChange = { viewModel.setFallbackIp(it) }, label = { Text("Tailscale-IP (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii))
+                                Text("Optionale 100.x.y.z-Adresse des Servers. Folio nutzt sie, wenn der Servername gerade nicht aufgelöst werden kann (z. B. nach einem Tailscale-Aussetzer).", style = MaterialTheme.typography.bodySmall)
                             }
                             ConnectionStatus(connectionTest, eInkMode)
                             OutlinedButton(onClick = { viewModel.testConnection(current()) }, enabled = current().isConfigured && connectionTest != ConnectionTest.Testing, modifier = Modifier.fillMaxWidth()) { Text("Verbindung testen") }
@@ -268,9 +271,9 @@ private fun ConnectionStatus(state: ConnectionTest, eInk: Boolean) {
             if (eInk) Text("…", Modifier.padding(end = 8.dp)) else CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.padding(end = 8.dp))
             Text("Teste Verbindung …")
         }
-        ConnectionTest.Success -> Row(verticalAlignment = Alignment.CenterVertically) {
+        is ConnectionTest.Success -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
-            Text("Bücher lesbar · Lesestand speicherbar", modifier = Modifier.padding(start = 8.dp))
+            Text(state.detail.ifBlank { "Bücher lesbar · Lesestand speicherbar" }, modifier = Modifier.padding(start = 8.dp))
         }
         is ConnectionTest.Failure -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Error, null, tint = MaterialTheme.colorScheme.error)
