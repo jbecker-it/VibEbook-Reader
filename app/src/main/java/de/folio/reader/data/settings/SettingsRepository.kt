@@ -7,6 +7,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import de.folio.reader.data.nextcloud.DnsFallbackStore
+import de.folio.reader.data.nextcloud.SharedPreferencesDnsBackend
 import de.folio.reader.domain.model.PageLayoutMode
 import de.folio.reader.domain.model.NextcloudSettings
 import de.folio.reader.domain.model.ThemeMode
