@@ -20,7 +20,7 @@ import javax.inject.Inject
 sealed interface ConnectionTest {
     data object Idle : ConnectionTest
     data object Testing : ConnectionTest
-    data object Success : ConnectionTest
+    data class Success(val detail: String) : ConnectionTest
     data class Failure(val message: String) : ConnectionTest
 }
 
@@ -139,9 +139,16 @@ class SettingsViewModel @Inject constructor(
         testJob = viewModelScope.launch {
             _connectionTest.value = ConnectionTest.Testing
             nextcloudClient.testConnection(try { nextcloudClient.resolveAccount(settings) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { _connectionTest.value = ConnectionTest.Failure(e.message ?: "Benutzerprüfung fehlgeschlagen"); return@launch })
-                .onSuccess { _connectionTest.value = ConnectionTest.Success }
+                .onSuccess { _connectionTest.value = ConnectionTest.Success(it) }
                 .onFailure { _connectionTest.value = ConnectionTest.Failure(it.message ?: "Unbekannter Fehler") }
         }
+    }
+
+    private val _fallbackIp = MutableStateFlow(settingsRepository.fallbackIp())
+    val fallbackIp: StateFlow<String> = _fallbackIp.asStateFlow()
+    fun setFallbackIp(value: String) {
+        settingsRepository.setFallbackIp(value)
+        _fallbackIp.value = value.trim()
     }
 
     fun resetConnectionTest() {

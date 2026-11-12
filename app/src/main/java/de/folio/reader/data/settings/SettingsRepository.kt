@@ -152,6 +152,10 @@ class SettingsRepository @Inject constructor(
 
     suspend fun currentNextcloudSettings(): NextcloudSettings = nextcloudSettings.first()
 
+    /** Optionale Tailscale-IP als DNS-Fallback (siehe [de.folio.reader.data.nextcloud.TailnetDns]). */
+    fun fallbackIp(): String = DnsFallbackStore(SharedPreferencesDnsBackend(context)).manual()
+    fun setFallbackIp(ip: String) { DnsFallbackStore(SharedPreferencesDnsBackend(context)).setManual(ip) }
+
     suspend fun saveNextcloudSettings(s: NextcloudSettings) {
         s.validate()
         val previous = currentNextcloudSettings()
